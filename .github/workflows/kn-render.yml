@@ -6,6 +6,9 @@ on:
       content_id:
         required: true
         type: string
+      topic:
+        required: true
+        type: string
       script:
         required: true
         type: string
@@ -14,6 +17,10 @@ on:
         type: string
       audio_url:
         required: true
+        type: string
+      audio_drive_file_id:
+        required: false
+        default: ""
         type: string
       watermark_url:
         required: false
@@ -34,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system packages
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
@@ -49,18 +56,7 @@ jobs:
           path: ~/.cache/huggingface
           key: kn-whisper-base-en-v1
 
-      - name: Install renderer dependencies
-        run: pip install -r requirements.txt
-
-      - name: Materialize renderer
-        env:
-          RENDERER_ZLIB_B64: "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"
-        run: |
-          python - <<'PY'
-          import base64, os, zlib
-          raw = zlib.decompress(base64.b64decode(os.environ["RENDERER_ZLIB_B64"]))
-          open("render.py","wb").write(raw)
-          PY
+      - run: pip install -r requirements.txt
 
       - name: Render Short
         env:
@@ -80,7 +76,10 @@ jobs:
           SAFE_ID="$(printf '%s' "$CONTENT_ID" | tr -c 'A-Za-z0-9_-' '_')"
           TAG="kn-render-${SAFE_ID}-${GITHUB_RUN_ID}"
           VIDEO="output/${SAFE_ID}.mp4"
-          gh release create "$TAG" "$VIDEO#${SAFE_ID}.mp4" --repo "$GITHUB_REPOSITORY" --title "Temporary render ${CONTENT_ID}" --notes "Automated Knowledge Nuggets render. Safe to delete after publishing."
+          gh release create "$TAG" "$VIDEO#${SAFE_ID}.mp4" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Temporary render ${CONTENT_ID}" \
+            --notes "Automated Knowledge Nuggets render. Safe to delete after publishing."
           URL="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[0].url')"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
@@ -89,14 +88,32 @@ jobs:
         if: ${{ inputs.callback_url != '' }}
         env:
           CALLBACK_URL: ${{ inputs.callback_url }}
+          CONTENT_ID: ${{ inputs.content_id }}
+          TOPIC: ${{ inputs.topic }}
+          SCRIPT: ${{ inputs.script }}
+          AUDIO_DRIVE_FILE_ID: ${{ inputs.audio_drive_file_id }}
           RENDER_URL: ${{ steps.release.outputs.url }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          qc=json.load(open("output/qc.json","r",encoding="utf-8"))
-          payload={**qc,"render_url":os.environ["RENDER_URL"],"release_tag":os.environ["RELEASE_TAG"],"github_run_id":os.environ["GITHUB_RUN_ID"],"repository":os.environ["GITHUB_REPOSITORY"]}
-          req=urllib.request.Request(os.environ["CALLBACK_URL"],data=json.dumps(payload).encode(),headers={"Content-Type":"application/json"},method="POST")
-          with urllib.request.urlopen(req,timeout=30) as r:
-              print(r.status,r.read().decode("utf-8","replace"))
+          qc = json.load(open("output/qc.json", "r", encoding="utf-8"))
+          payload = {
+              **qc,
+              "topic": os.environ["TOPIC"],
+              "script": os.environ["SCRIPT"],
+              "audio_drive_file_id": os.environ.get("AUDIO_DRIVE_FILE_ID", ""),
+              "render_url": os.environ["RENDER_URL"],
+              "release_tag": os.environ["RELEASE_TAG"],
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+          }
+          req = urllib.request.Request(
+              os.environ["CALLBACK_URL"],
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=30) as r:
+              print(r.status, r.read().decode("utf-8", "replace"))
           PY
