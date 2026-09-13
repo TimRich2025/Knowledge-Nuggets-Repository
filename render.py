@@ -15,7 +15,7 @@ O = Path("output")
 W.mkdir(exist_ok=True)
 O.mkdir(exist_ok=True)
 
-BOT_UA = "KnowledgeNuggetsBot/1.2 (https://github.com/TimRich2025/Knowledge-Nuggets-Repository) python-requests/2.32.5"
+BOT_UA = "KnowledgeNuggetsBot/1.3 (https://github.com/TimRich2025/Knowledge-Nuggets-Repository) python-requests/2.32.5"
 
 def log(msg):
     print(f"[KN] {msg}", flush=True)
@@ -33,16 +33,16 @@ def run(cmd, label="command"):
 
 def suffix_for(url, ctype):
     ext = Path(urlparse(url).path).suffix.lower()
-    allowed = {".jpg", ".jpeg", ".png", ".mp4", ".webm", ".mov", ".m4v"}
+    allowed = {".mp4", ".webm", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".mp3"}
     if ext in allowed:
         return ext
     ct = (ctype or "").lower().split(";")[0].strip()
     return {
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
         "video/mp4": ".mp4",
         "video/webm": ".webm",
         "video/quicktime": ".mov",
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
         "audio/mpeg": ".mp3",
     }.get(ct, ".bin")
 
@@ -53,13 +53,11 @@ def candidate_urls(url):
         filename = Path(p.path).name
         if filename:
             out.append(
-                "https://commons.wikimedia.org/wiki/Special:Redirect/file/"
-                + quote(filename)
-                + "?width=1280"
+                "https://commons.wikimedia.org/wiki/Special:Redirect/file/" + quote(filename)
             )
     return out
 
-def download(url, stem):
+def download(url, stem, expected=None):
     last = None
     headers = {
         "User-Agent": BOT_UA,
@@ -72,7 +70,7 @@ def download(url, stem):
                 log(f"download attempt {attempt}: {candidate}")
                 r = requests.get(
                     candidate,
-                    timeout=(15, 90),
+                    timeout=(15, 120),
                     allow_redirects=True,
                     headers=headers,
                 )
@@ -87,7 +85,19 @@ def download(url, stem):
                     raise RuntimeError(f"unexpected content-type {ct} final_url={r.url}")
                 if len(r.content) < 128:
                     raise RuntimeError(f"download too small ({len(r.content)} bytes)")
-                path = W / f"{stem}{suffix_for(r.url, ct)}"
+
+                ext = suffix_for(r.url, ct)
+                if expected == "video":
+                    if not (low.startswith("video/") or ext in {".mp4", ".webm", ".mov", ".m4v"}):
+                        raise RuntimeError(f"STATIC_MEDIA_REJECTED content-type={ct} ext={ext}")
+                elif expected == "audio":
+                    if not (low.startswith("audio/") or ext == ".mp3"):
+                        raise RuntimeError(f"unexpected audio media content-type={ct} ext={ext}")
+                elif expected == "image":
+                    if not (low.startswith("image/") or ext in {".jpg", ".jpeg", ".png"}):
+                        raise RuntimeError(f"unexpected watermark media content-type={ct} ext={ext}")
+
+                path = W / f"{stem}{ext}"
                 path.write_bytes(r.content)
                 log(f"downloaded {len(r.content)} bytes, type={ct}, final={r.url}, file={path}")
                 return path, ct
@@ -96,7 +106,7 @@ def download(url, stem):
                 log(f"download failed: {e}")
                 if attempt < 3:
                     time.sleep(min(3 * attempt, 9))
-        log(f"primary candidate exhausted, trying fallback if available: {candidate}")
+        log(f"candidate exhausted: {candidate}")
     raise RuntimeError(f"download exhausted for {url}: {last}")
 
 def duration(path):
@@ -107,9 +117,22 @@ def duration(path):
             "-of", "default=noprint_wrappers=1:nokey=1",
             str(path),
         ],
-        f"ffprobe {path.name}",
+        f"ffprobe duration {path.name}",
     ).strip()
     return float(s)
+
+def has_video_stream(path):
+    out = run(
+        [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        f"ffprobe video {path.name}",
+    ).strip()
+    return out == "video"
 
 def ts(x):
     return f"{int(x//3600)}:{int((x%3600)//60):02d}:{x%60:05.2f}"
@@ -137,17 +160,19 @@ def build_subs(audio, path):
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
+WrapStyle: 2
+ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: KN,DejaVu Sans,64,&H00FFFFFF,&H00008AFF,&H00111111,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,70,70,275,1
+Style: KN,DejaVu Sans,66,&H00FFFFFF,&H00008AFF,&H00101010,&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,80,80,255,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
     for i, (word, st, en) in enumerate(words):
         lo = max(0, i - 2)
-        hi = min(len(words), lo + 6)
-        lo = max(0, hi - 6)
+        hi = min(len(words), lo + 5)
+        lo = max(0, hi - 5)
         out = []
         for j in range(lo, hi):
             t = words[j][0].replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
@@ -161,49 +186,83 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     log(f"word timestamps: {len(words)}")
     return len(words)
 
+def scene_durations(scenes, total):
+    weights = []
+    for scene in scenes:
+        phrase = str(scene.get("spoken_phrase") or "").strip()
+        weights.append(max(1, len(phrase.split())))
+    sw = sum(weights)
+    raw = [total * w / sw for w in weights]
+    # Keep every visual long enough to register, then renormalize.
+    raw = [max(1.2, x) for x in raw]
+    scale = total / sum(raw)
+    return [x * scale for x in raw]
+
 if PKG.get("production_status") != "READY":
     raise RuntimeError("Render package not READY")
 
 scenes = PKG.get("scenes") or []
 if not scenes:
     raise RuntimeError("No scenes")
+if not WM:
+    raise RuntimeError("WATERMARK_REQUIRED")
 
-log(f"content={CID}; scenes={len(scenes)}")
-audio, _ = download(AUDIO, "narration")
+urls = [str(s.get("source_url") or "") for s in scenes]
+if any(not u for u in urls):
+    raise RuntimeError("One or more scenes have no source_url")
+if len(scenes) >= 4:
+    unique_ratio = len(set(urls)) / len(urls)
+    if unique_ratio < 0.60:
+        raise RuntimeError(f"INSUFFICIENT_VISUAL_VARIETY unique_ratio={unique_ratio:.2f}")
+    if max(urls.count(u) for u in set(urls)) > 2:
+        raise RuntimeError(F"SOURCE_REUSED_MORE_THAN_TWICE")
+
+log(f"content={CID}; scenes={len(scenes)}; unique_sources={len(set(urls)}")
+audio, _ = download(AUDIO, "narration", expected="audio")
 ad = duration(audio)
-per = max(ad / len(scenes), 0.5)
-log(f"audio duration={ad:.3f}s; scene duration={per:.3f}s")
+durations = scene_durations(scenes, ad)
+log("scene durations=" + ",".join(f"{x:.3f}" for x in durations))
 
 cache = {}
+source_use_count = {}
 clips = []
 vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30"
 
-for i, scene in enumerate(scenes, 1):
-    url = scene.get("source_url")
-    if not url:
-        raise RuntimeError(f"scene {i} has no source_url")
+for i, (scene, scene_len) in enumerate(zip(scenes, durations), 1):
+    url = scene["source_url"]
+
     if url in cache:
-        src, ct = cache[url]
-        log(f"scene {i}: reusing cached source {src}")
+        src, ct, src_dur = cache[url]
+        log(f"scene {i}: reusing cached motion source {src}")
     else:
-        src, ct = download(url, f"source_{len(cache)+1}")
-        cache[url] = (src, ct)
+        src, ct = download(url, f"source_{len(cache)+1}", expected="video")
+        if not has_video_stream(src):
+            raise RuntimeError(f"STATIC_OR_INVALID_SCENE_SOURCE scene={i}")
+        src_dur = duration(src)
+        cache[url] = (src, ct, src_dur)
+
+    use_index = source_use_count.get(url, 0)
+    source_use_count[url] = use_index + 1
+
+    offset = 0.0
+    if use_index > 0 and src_dur > scene_len + 1:
+        offset = min(max(0.0, src_dur * 0.45), max(0.0, src_dur - scene_len - 0.25))
 
     clip = W / f"scene_{i:02d}.mp4"
-    is_image = (ct or "").lower().startswith("image/") or src.suffix.lower() in {".jpg", ".jpeg", ".png"}
-    if is_image:
-        inp = ["-loop", "1", "-framerate", "30", "-i", str(src)]
-    else:
-        inp = ["-stream_loop", "-1", "-i", str(src)]
-
     run(
         [
-            "ffmpeg", "-hide_banner", "-y", *inp,
-            "-t", f"{per:.3f}", "-vf", vf, "-an",
+            "ffmpeg", "-hide_banner", "-y",
+            "-stream_loop", "-1",
+            "-ss", f"{offset:.3f}",
+            "-i", str(src),
+            "-t", f"{scene_len:.3f}",
+            "-vf", vf,
+            "-an",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-pix_fmt", "yuv420p", "-r", "30", str(clip),
+            "-pix_fmt", "yuv420p", "-r", "30",
+            str(clip),
         ],
-        f"normalize scene {i}",
+        f"normalize motion scene {i}",
     )
     clips.append(clip)
 
@@ -216,37 +275,40 @@ run(
         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-pix_fmt", "yuv420p", "-r", "30", str(video),
     ],
-    "concat scenes",
+    "concat motion scenes",
 )
 
 ass = W / "subs.ass"
 wc = build_subs(audio, ass)
+
+wm, _ = download(WM, "watermark", expected="image")
 safe = re.sub(r"[^A-Za-z0-9_-]+", "_", CID)[:80] or "kn"
 out = O / f"{safe}.mp4"
 aa = str(ass.resolve()).replace(":", r"\:")
 
-if WM:
-    wm, _ = download(WM, "watermark")
-    fc = f"[0:v]ass='{aa}'[v0];[1:v]scale=95:-1[wm];[v0][wm]overlay=W-w-44:H-h-44[v]"
-    cmd = [
-        "ffmpeg", "-hide_banner", "-y",
-        "-i", str(video), "-i", str(wm), "-i", str(audio),
-        "-filter_complex", fc, "-map", "[v]", "-map", "2:a:0",
-    ]
-else:
-    cmd = [
-        "ffmpeg", "-hide_banner", "-y",
-        "-i", str(video), "-i", str(audio),
-        "-vf", f"ass='{aa}'", "-map", "0:v:0", "-map", "1:a:0",
-    ]
+fc = (
+    f"[0:v]ass='{aa}'[v0];"
+    f"[1:v]scale=84:-1,format=rgba,colorchannelmixer=aa=0.68[wm];"
+    f"[v0][wm]overlay=(W-w)/2:H-h-38[v]"
+)
+cmd = [
+    "ffmpeg", "-hide_banner", "-y",
+    "-i", str(video),
+    "-loop", "1", "-i", str(wm),
+    "-i", str(audio),
+    "-filter_complex", fc,
+    "-map", "[v]", "-map", "2:a:0",
+]
 
 run(
     cmd + [
         "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-        "-shortest", "-movflags", "+faststart", str(out),
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest", "-movflags", "+faststart",
+        str(out),
     ],
-    "final render",
+    "final Knowledge Nuggets layout render",
 )
 
 fd = duration(out)
@@ -270,6 +332,9 @@ if probe.get("codec_name") != "h264":
 if abs(fd - ad) > 1:
     score -= 20
     issues.append("duration")
+if len(cache) < max(1, int(len(scenes) * 0.60)):
+    score -= 25
+    issues.append("insufficient_motion_variety")
 
 q = {
     "content_id": CID,
@@ -278,6 +343,10 @@ q = {
     "technical_qc_score": max(score, 0),
     "content_qc_score": 100 if wc >= max(3, int(len(SCRIPT.split()) * .7)) else 80,
     "word_timestamps": wc,
+    "motion_scenes": len(scenes),
+    "unique_motion_sources": len(cache),
+    "watermark": "REQUIRED_AND_APPLIED",
+    "subtitle_layout": "KN_FIXED_V1",
     "issues": issues,
 }
 (O / "qc.json").write_text(json.dumps(q), encoding="utf-8")
