@@ -217,7 +217,7 @@ if len(scenes) >= 4:
     if max(urls.count(u) for u in set(urls)) > 2:
         raise RuntimeError(F"SOURCE_REUSED_MORE_THAN_TWICE")
 
-log(f"content={CID}; scenes={len(scenes)}; unique_sources={len(set(urls)}")
+log(f"content={CID}; scenes={len(scenes)}; unique_sources={len(set(urls))}")
 audio, _ = download(AUDIO, "narration", expected="audio")
 ad = duration(audio)
 durations = scene_durations(scenes, ad)
