@@ -53,7 +53,11 @@ def download(url, stem):
                 url,
                 timeout=(15, 90),
                 allow_redirects=True,
-                headers={"User-Agent": "KnowledgeNuggetsRenderer/1.1 (+GitHub Actions)"},
+                headers={
+                    "User-Agent": "KnowledgeNuggetsBot/1.2 (https://github.com/TimRich2025/Knowledge-Nuggets-Repository) python-requests/2.32.5",
+                    "Api-User-Agent": "KnowledgeNuggetsBot/1.2 (https://github.com/TimRich2025/Knowledge-Nuggets-Repository)",
+                    "Accept": "*/*",
+                },
             )
             r.raise_for_status()
             ct = r.headers.get("content-type", "")
@@ -92,10 +96,10 @@ def build_subs(audio, path):
         language="en",
         word_timestamps=True,
         beam_size=3,
-        initial_prompt=SCRIPT[:1000],
+        initial_prompt=SCRIPT[[:1000],
     )
     words = []
-    for s in segs:
+    for s in segs :
         for q in (s.words or []):
             word = (q.word or "").strip()
             if q.start is not None and q.end is not None and word:
