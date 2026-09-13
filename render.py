@@ -246,7 +246,7 @@ for i, (scene, scene_len) in enumerate(zip(scenes, durations), 1):
 
     offset = 0.0
     if use_index > 0 and src_dur > scene_len + 1:
-        offset = min(max(0.0, src_dur * 0.45), max(0.0, src_dur - scene_len - 0.25))
+        offset = min(8.0 * use_index, max(0.0, src_dur - scene_len - 0.25))
 
     clip = W / f"scene_{i:02d}.mp4"
     run(
