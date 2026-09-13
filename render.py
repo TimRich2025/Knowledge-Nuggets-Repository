@@ -1,6 +1,6 @@
 import json, os, re, subprocess, time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 import requests
 from faster_whisper import WhisperModel
 
@@ -14,6 +14,8 @@ W = Path("work")
 O = Path("output")
 W.mkdir(exist_ok=True)
 O.mkdir(exist_ok=True)
+
+BOT_UA = "KnowledgeNuggetsBot/1.2 (https://github.com/TimRich2025/Knowledge-Nuggets-Repository) python-requests/2.32.5"
 
 def log(msg):
     print(f"[KN] {msg}", flush=True)
@@ -44,43 +46,67 @@ def suffix_for(url, ctype):
         "audio/mpeg": ".mp3",
     }.get(ct, ".bin")
 
+def candidate_urls(url):
+    out = [url]
+    p = urlparse(url)
+    if p.netloc == "upload.wikimedia.org":
+        filename = Path(p.path).name
+        if filename:
+            out.append(
+                "https://commons.wikimedia.org/wiki/Special:Redirect/file/"
+                + quote(filename)
+                + "?width=1280"
+            )
+    return out
+
 def download(url, stem):
     last = None
-    for attempt in range(1, 7):
-        try:
-            log(f"download attempt {attempt}: {url}")
-            r = requests.get(
-                url,
-                timeout=(15, 90),
-                allow_redirects=True,
-                headers={
-                    "User-Agent": "KnowledgeNuggetsBot/1.2 (https://github.com/TimRich2025/Knowledge-Nuggets-Repository) python-requests/2.32.5",
-                    "Api-User-Agent": "KnowledgeNuggetsBot/1.2 (https://github.com/TimRich2025/Knowledge-Nuggets-Repository)",
-                    "Accept": "*/*",
-                },
-            )
-            r.raise_for_status()
-            ct = r.headers.get("content-type", "")
-            low = ct.lower()
-            if "text/html" in low or "text/plain" in low:
-                raise RuntimeError(f"unexpected content-type {ct} final_url={r.url}")
-            if len(r.content) < 128:
-                raise RuntimeError(f"download too small ({len(r.content)} bytes)")
-            path = W / f"{stem}{suffix_for(r.url, ct)}"
-            path.write_bytes(r.content)
-            log(f"downloaded {len(r.content)} bytes, type={ct}, final={r.url}, file={path}")
-            return path, ct
-        except Exception as e:
-            last = e
-            log(f"download failed: {e}")
-            if attempt < 6:
-                time.sleep(min(2 ** attempt, 12))
+    headers = {
+        "User-Agent": BOT_UA,
+        "Api-User-Agent": BOT_UA,
+        "Accept": "*/*",
+    }
+    for candidate in candidate_urls(url):
+        for attempt in range(1, 4):
+            try:
+                log(f"download attempt {attempt}: {candidate}")
+                r = requests.get(
+                    candidate,
+                    timeout=(15, 90),
+                    allow_redirects=True,
+                    headers=headers,
+                )
+                if r.status_code == 429:
+                    retry_after = r.headers.get("Retry-After")
+                    wait = int(retry_after) if retry_after and retry_after.isdigit() else min(3 * attempt, 9)
+                    raise RuntimeError(f"HTTP 429; retry-after={wait}s")
+                r.raise_for_status()
+                ct = r.headers.get("content-type", "")
+                low = ct.lower()
+                if "text/html" in low or "text/plain" in low:
+                    raise RuntimeError(f"unexpected content-type {ct} final_url={r.url}")
+                if len(r.content) < 128:
+                    raise RuntimeError(f"download too small ({len(r.content)} bytes)")
+                path = W / f"{stem}{suffix_for(r.url, ct)}"
+                path.write_bytes(r.content)
+                log(f"downloaded {len(r.content)} bytes, type={ct}, final={r.url}, file={path}")
+                return path, ct
+            except Exception as e:
+                last = e
+                log(f"download failed: {e}")
+                if attempt < 3:
+                    time.sleep(min(3 * attempt, 9))
+        log(f"primary candidate exhausted, trying fallback if available: {candidate}")
     raise RuntimeError(f"download exhausted for {url}: {last}")
 
 def duration(path):
     s = run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
         f"ffprobe {path.name}",
     ).strip()
     return float(s)
@@ -96,10 +122,10 @@ def build_subs(audio, path):
         language="en",
         word_timestamps=True,
         beam_size=3,
-        initial_prompt=SCRIPT[[:1000],
+        initial_prompt=SCRIPT[:1000],
     )
     words = []
-    for s in segs :
+    for s in segs:
         for q in (s.words or []):
             word = (q.word or "").strip()
             if q.start is not None and q.end is not None and word:
@@ -129,7 +155,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 t = r"{\c&H00008AFF&}" + t + r"{\c&H00FFFFFF&}"
             out.append(t)
         lines.append(
-            f"Dialogue: 0,{ts(st)},{ts(max(en, st+.12))},KN,,0,0,0,,{' '.join(out)}"
+            f"Dialogue: 0,{ts(st)},{ts(max(en, st + .12))},KN,,0,0,0,,{' '.join(out)}"
         )
     path.write_text(header + "\n".join(lines), encoding="utf-8")
     log(f"word timestamps: {len(words)}")
@@ -171,10 +197,12 @@ for i, scene in enumerate(scenes, 1):
         inp = ["-stream_loop", "-1", "-i", str(src)]
 
     run(
-        ["ffmpeg", "-hide_banner", "-y", *inp,
-         "-t", f"{per:.3f}", "-vf", vf, "-an",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-         "-pix_fmt", "yuv420p", "-r", "30", str(clip)],
+        [
+            "ffmpeg", "-hide_banner", "-y", *inp,
+            "-t", f"{per:.3f}", "-vf", vf, "-an",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-r", "30", str(clip),
+        ],
         f"normalize scene {i}",
     )
     clips.append(clip)
@@ -183,9 +211,11 @@ lst = W / "concat.txt"
 lst.write_text("\n".join(f"file '{p.resolve().as_posix()}'" for p in clips), encoding="utf-8")
 video = W / "visuals.mp4"
 run(
-    ["ffmpeg", "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
-     "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-     "-pix_fmt", "yuv420p", "-r", "30", str(video)],
+    [
+        "ffmpeg", "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
+        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-r", "30", str(video),
+    ],
     "concat scenes",
 )
 
@@ -198,23 +228,34 @@ aa = str(ass.resolve()).replace(":", r"\:")
 if WM:
     wm, _ = download(WM, "watermark")
     fc = f"[0:v]ass='{aa}'[v0];[1:v]scale=95:-1[wm];[v0][wm]overlay=W-w-44:H-h-44[v]"
-    cmd = ["ffmpeg", "-hide_banner", "-y", "-i", str(video), "-i", str(wm), "-i", str(audio),
-           "-filter_complex", fc, "-map", "[v]", "-map", "2:a:0"]
+    cmd = [
+        "ffmpeg", "-hide_banner", "-y",
+        "-i", str(video), "-i", str(wm), "-i", str(audio),
+        "-filter_complex", fc, "-map", "[v]", "-map", "2:a:0",
+    ]
 else:
-    cmd = ["ffmpeg", "-hide_banner", "-y", "-i", str(video), "-i", str(audio),
-           "-vf", f"ass='{aa}'", "-map", "0:v:0", "-map", "1:a:0"]
+    cmd = [
+        "ffmpeg", "-hide_banner", "-y",
+        "-i", str(video), "-i", str(audio),
+        "-vf", f"ass='{aa}'", "-map", "0:v:0", "-map", "1:a:0",
+    ]
 
 run(
-    cmd + ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
-           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-           "-shortest", "-movflags", "+faststart", str(out)],
+    cmd + [
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+        "-shortest", "-movflags", "+faststart", str(out),
+    ],
     "final render",
 )
 
 fd = duration(out)
 probe = json.loads(run(
-    ["ffprobe", "-v", "error", "-select_streams", "v:0",
-     "-show_entries", "stream=width,height,codec_name", "-of", "json", str(out)],
+    [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,codec_name",
+        "-of", "json", str(out),
+    ],
     "final probe",
 ))["streams"][0]
 
