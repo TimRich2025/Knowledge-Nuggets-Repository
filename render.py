@@ -47,32 +47,49 @@ def nasa_asset_id(url):
     base=Path(urlparse(url).path).name
     return base.split("~",1)[0].split("_",1)[0]
 
-def resolve_nasa_large(url):
+def resolve_nasa_candidates(url):
     url=str(url).replace("http://images-assets.nasa.gov","https://images-assets.nasa.gov")
-    if "images-assets.nasa.gov" not in url: return url
-    asset_id=nasa_asset_id(url); headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"}
+    if "images-assets.nasa.gov" not in url:
+        return [url]
+    asset_id=nasa_asset_id(url)
+    headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"}
     api=f"https://images-api.nasa.gov/asset/{asset_id}"
     r=requests.get(api,headers=headers,timeout=(15,30))
     if r.status_code==404:
         q=asset_id.split("_",1)[0] if asset_id.startswith("jsc") else asset_id
-        sr=requests.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video"},headers=headers,timeout=(15,30)); sr.raise_for_status()
-        hits=sr.json().get("collection",{}).get("items",[]); nasa_ids=[]
+        sr=requests.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video"},headers=headers,timeout=(15,30))
+        sr.raise_for_status()
+        hits=sr.json().get("collection",{}).get("items",[])
+        nasa_ids=[]
         for hit in hits:
             data=hit.get("data") or []
-            if data and data[0].get("nasa_id"): nasa_ids.append(str(data[0]["nasa_id"]))
+            if data and data[0].get("nasa_id"):
+                nasa_ids.append(str(data[0]["nasa_id"]))
         exact=[x for x in nasa_ids if x.lower().startswith(q.lower())]
-        if exact: asset_id=exact[0]
-        elif nasa_ids: asset_id=nasa_ids[0]
-        else: raise RuntimeError(f"NASA asset search returned no result for {q}")
+        if exact:
+            asset_id=exact[0]
+        elif nasa_ids:
+            asset_id=nasa_ids[0]
+        else:
+            raise RuntimeError(f"NASA asset search returned no result for {q}")
         r=requests.get(f"https://images-api.nasa.gov/asset/{asset_id}",headers=headers,timeout=(15,30))
-    r.raise_for_status(); items=r.json().get("collection",{}).get("items",[])
+    r.raise_for_status()
+    items=r.json().get("collection",{}).get("items",[])
     hrefs=[str(x.get("href","")).replace("http://","https://") for x in items if x.get("href")]
     videos=[h for h in hrefs if re.search(r"\.(mp4|mov|m4v)$",h,re.I)]
-    preferred=[h for h in videos if re.search(r"~large\.(mp4|mov|m4v)$",h,re.I)]
-    if not preferred: preferred=[h for h in videos if "large" in h.lower() and "orig" not in h.lower()]
-    if not preferred: preferred=[h for h in videos if re.search(r"~medium\.(mp4|mov|m4v)$",h,re.I)]
-    if not preferred: raise RuntimeError(f"No practical NASA rendition found for {asset_id}")
-    print(f"NASA rendition {asset_id}: {preferred[0]}"); return preferred[0]
+    large=[h for h in videos if re.search(r"~large\.(mp4|mov|m4v)$",h,re.I)]
+    medium=[h for h in videos if re.search(r"~medium\.(mp4|mov|m4v)$",h,re.I)]
+    small=[h for h in videos if re.search(r"~small\.(mp4|mov|m4v)$",h,re.I)]
+    original=[h for h in videos if "~orig." in h.lower()]
+    candidates=[]
+    for group in (large,medium,small,original):
+        for h in group:
+            if h not in candidates:
+                candidates.append(h)
+    if not candidates:
+        raise RuntimeError(f"No practical NASA rendition found for {asset_id}")
+    print(f"NASA candidates {asset_id}: {candidates}")
+    return candidates
 
 def ass_escape(s): return s.replace("\\",r"\\").replace("{",r"\{").replace("}",r"\}")
 def ass_time(sec):
@@ -128,27 +145,87 @@ download(WATERMARK_URL,WM_PATH)
 words=tokenize(SCRIPT); build_ass(build_word_times(words,audio_duration))
 scene_weights=[max(1,len(tokenize(s.get("spoken_phrase","")))) for s in scenes]; weight_sum=sum(scene_weights); durations=[audio_duration*w/weight_sum for w in scene_weights]
 if durations: durations[-1]+=audio_duration-sum(durations)
-resolved=[resolve_nasa_large(s["source_url"]) for s in scenes]
-local_sources=[]
-for i,url in enumerate(resolved):
-    suffix=Path(urlparse(url).path).suffix.lower(); suffix=suffix if suffix in (".mp4",".mov",".m4v") else ".mp4"
-    dest=OUT/f"source_{i}{suffix}"; print(f"Downloading source {i+1}/{len(resolved)}"); download(url,dest,timeout=(20,300)); local_sources.append(dest)
-cmd=["ffmpeg","-hide_banner","-loglevel","warning","-y"]
-for path,dur in zip(local_sources,durations): cmd += ["-ss","8","-t",f"{dur+0.35:.3f}","-i",str(path)]
-wm_idx=len(scenes); audio_idx=wm_idx+1; cmd += ["-loop","1","-i",str(WM_PATH),"-i",str(AUDIO_PATH)]
-filters=[]; labels=[]
-for i,(scene,dur) in enumerate(zip(scenes,durations)):
+candidate_sets=[resolve_nasa_candidates(s["source_url"]) for s in scenes]
+resolved=[]
+vertical_clips=[]
+
+def scene_filter(scene):
     layout=str(scene.get("layout_mode","FIT_BLUR")).upper()
     if layout=="CROP_FILL":
-        x=crop_x(scene.get("crop_preference")); filters.append(f"[{i}:v]scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920:{x}:(ih-1920)/2,setsar=1,fps=30,trim=duration={dur:.3f},setpts=PTS-STARTPTS[v{i}]")
+        x=crop_x(scene.get("crop_preference"))
+        return f"scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920:{x}:(ih-1920)/2,setsar=1,fps=30"
+    return "split=2[bg][fg];[bg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,gblur=sigma=8,scale=1080:1920:flags=bilinear,eq=brightness=-0.05:saturation=0.82,setsar=1,fps=30[bg2];[fg]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1,fps=30[fg2];[bg2][fg2]overlay=(W-w)/2:(H-h)/2:shortest=1"
+
+for i,(scene,dur,candidates) in enumerate(zip(scenes,durations,candidate_sets)):
+    last_error=None
+    clip=OUT/f"vertical_{i}.mp4"
+    for attempt,url in enumerate(candidates[:3], start=1):
+        suffix=Path(urlparse(url).path).suffix.lower()
+        suffix=suffix if suffix in (".mp4",".mov",".m4v") else ".mp4"
+        source=OUT/f"source_{i}_{attempt}{suffix}"
+        try:
+            print(f"Scene {i+1}: trying candidate {attempt}/{min(3,len(candidates))}: {url}", flush=True)
+            download(url,source,timeout=(20,180))
+            vf=scene_filter(scene)
+            if ";" in vf:
+                filter_complex=f"[0:v]{vf}[vout]"
+                scene_cmd=[
+                    "ffmpeg","-hide_banner","-loglevel","error","-y",
+                    "-ss","8","-i",str(source),"-t",f"{dur:.3f}","-an",
+                    "-filter_complex",filter_complex,"-map","[vout]",
+                    "-c:v","libx264","-preset","ultrafast","-crf","10",
+                    "-pix_fmt","yuv420p","-movflags","+faststart",str(clip)
+                ]
+            else:
+                scene_cmd=[
+                    "ffmpeg","-hide_banner","-loglevel","error","-y",
+                    "-ss","8","-i",str(source),"-t",f"{dur:.3f}","-an",
+                    "-vf",vf,
+                    "-c:v","libx264","-preset","ultrafast","-crf","10",
+                    "-pix_fmt","yuv420p","-movflags","+faststart",str(clip)
+                ]
+            run(scene_cmd,timeout=90)
+            if not clip.exists() or clip.stat().st_size < 200000:
+                raise RuntimeError("Vertical clip output missing or too small")
+            resolved.append(url)
+            vertical_clips.append(clip)
+            print(f"Scene {i+1}: prepared successfully from {url}", flush=True)
+            break
+        except Exception as exc:
+            last_error=exc
+            print(f"Scene {i+1}: candidate failed: {type(exc).__name__}: {exc}", flush=True)
+            if clip.exists():
+                clip.unlink()
+        finally:
+            if source.exists():
+                source.unlink()
     else:
-        filters.append(f"[{i}:v]split=2[s{i}bg][s{i}fg];[s{i}bg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,gblur=sigma=8,scale=1080:1920:flags=bilinear,eq=brightness=-0.05:saturation=0.82,setsar=1,fps=30,trim=duration={dur:.3f},setpts=PTS-STARTPTS[s{i}b];[s{i}fg]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1,fps=30,trim=duration={dur:.3f},setpts=PTS-STARTPTS[s{i}f];[s{i}b][s{i}f]overlay=(W-w)/2:(H-h)/2:shortest=1[v{i}]")
-    labels.append(f"[v{i}]")
-filters.append("".join(labels)+f"concat=n={len(scenes)}:v=1:a=0[base]"); filters.append(f"[{wm_idx}:v]scale=48:-1[wm]"); filters.append("[base][wm]overlay=W-w-52:H-h-78:shortest=1[branded]"); filters.append(f"[branded]ass={ASS_PATH.as_posix()}[finalv]")
-cmd += ["-filter_complex",";".join(filters),"-map","[finalv]","-map",f"{audio_idx}:a:0","-t",f"{audio_duration:.3f}","-c:v","libx264","-preset","veryfast","-crf","18","-pix_fmt","yuv420p","-profile:v","high","-level","4.2","-c:a","aac","-b:a","192k","-movflags","+faststart",str(VIDEO_OUT)]
-run(cmd,timeout=420)
+        raise RuntimeError(f"Scene {i+1} could not be prepared from any candidate: {last_error}")
+
+cmd=["ffmpeg","-hide_banner","-loglevel","error","-y"]
+for path in vertical_clips:
+    cmd += ["-i",str(path)]
+wm_idx=len(scenes)
+audio_idx=wm_idx+1
+cmd += ["-loop","1","-i",str(WM_PATH),"-i",str(AUDIO_PATH)]
+labels="".join(f"[{i}:v]" for i in range(len(scenes)))
+filters=[
+    labels+f"concat=n={len(scenes)}:v=1:a=0[base]",
+    f"[{wm_idx}:v]scale=48:-1[wm]",
+    "[base][wm]overlay=W-w-52:H-h-78:shortest=1[branded]",
+    f"[branded]ass={ASS_PATH.as_posix()}[finalv]"
+]
+cmd += [
+    "-filter_complex",";".join(filters),
+    "-map","[finalv]","-map",f"{audio_idx}:a:0",
+    "-t",f"{audio_duration:.3f}",
+    "-c:v","libx264","-preset","veryfast","-crf","18",
+    "-pix_fmt","yuv420p","-profile:v","high","-level","4.2",
+    "-c:a","aac","-b:a","192k","-movflags","+faststart",str(VIDEO_OUT)
+]
+run(cmd,timeout=180)
 render_duration=ffprobe_duration(VIDEO_OUT); issues=[]
 if abs(render_duration-audio_duration)>0.35: issues.append("duration_mismatch")
 if VIDEO_OUT.stat().st_size<500000: issues.append("render_file_too_small")
-qc={"content_id":CONTENT_ID,"status":"RENDER_READY" if not issues else "RENDER_QC_WARNING","duration_seconds":round(render_duration,3),"technical_qc_score":100 if not issues else 85,"content_qc_score":round(sum(float(s.get("semantic_score",0)) for s in scenes)/len(scenes),1),"motion_scenes":len(scenes),"unique_motion_sources":len(set(resolved)),"watermark":"BRAIN_NUGGET_TRANSPARENT_BOTTOM_RIGHT_4PCT","subtitle_layout":"KN_SAFE_V2_4WORD_ACTIVE_ORANGE","issues":issues,"render_strategy":"LOCAL_SOURCE_DOWNLOAD_LAYOUT_AWARE_ONE_PASS","resolved_sources":resolved}
+qc={"content_id":CONTENT_ID,"status":"RENDER_READY" if not issues else "RENDER_QC_WARNING","duration_seconds":round(render_duration,3),"technical_qc_score":100 if not issues else 85,"content_qc_score":round(sum(float(s.get("semantic_score",0)) for s in scenes)/len(scenes),1),"motion_scenes":len(scenes),"unique_motion_sources":len(set(resolved)),"watermark":"BRAIN_NUGGET_TRANSPARENT_BOTTOM_RIGHT_4PCT","subtitle_layout":"KN_SAFE_V2_4WORD_ACTIVE_ORANGE","issues":issues,"render_strategy":"SCENE_PREPROCESS_RETRY_HIGH_QUALITY_FINAL_PASS","resolved_sources":resolved}
 QC_PATH.write_text(json.dumps(qc,ensure_ascii=False,indent=2),encoding="utf-8"); print(json.dumps(qc,ensure_ascii=False))
