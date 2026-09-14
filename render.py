@@ -9,13 +9,11 @@ import requests
 
 OUT = Path("output")
 OUT.mkdir(exist_ok=True)
-
 CONTENT_ID = os.environ.get("KN_CONTENT_ID", "kn-render")
 SCRIPT = os.environ.get("KN_SCRIPT", "").strip()
 RENDER_PACKAGE_RAW = os.environ.get("KN_RENDER_PACKAGE", "{}")
 AUDIO_URL = os.environ.get("KN_AUDIO_URL", "")
 WATERMARK_URL = os.environ.get("KN_WATERMARK_URL", "")
-
 SAFE_ID = re.sub(r"[^A-Za-z0-9_-]+", "_", CONTENT_ID)
 VIDEO_OUT = OUT / f"{SAFE_ID}.mp4"
 AUDIO_PATH = OUT / "narration.mp3"
@@ -28,33 +26,46 @@ def run(cmd, timeout=480):
     subprocess.run(cmd, check=True, timeout=timeout)
 
 def ffprobe_duration(path):
-    p = subprocess.run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(path)],capture_output=True,text=True,check=True,timeout=60)
+    p=subprocess.run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(path)],capture_output=True,text=True,check=True,timeout=60)
     return float(p.stdout.strip())
 
-def download(url, dest, timeout=(20,240)):
+def download(url,dest,timeout=(20,240)):
     if not url: raise RuntimeError(f"Missing URL for {dest}")
     with requests.get(url,headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"},stream=True,timeout=timeout,allow_redirects=True) as r:
         r.raise_for_status()
         with dest.open("wb") as f:
             for chunk in r.iter_content(chunk_size=1024*1024):
                 if chunk: f.write(chunk)
-    if not dest.exists() or dest.stat().st_size < 1024: raise RuntimeError(f"Downloaded file is unexpectedly small: {dest}")
+    if not dest.exists() or dest.stat().st_size<1024: raise RuntimeError(f"Downloaded file is unexpectedly small: {dest}")
 
 def nasa_asset_id(url):
     parts=[p for p in urlparse(url).path.split("/") if p]
     for marker in ("video","image","audio"):
         if marker in parts:
             idx=parts.index(marker)
-            if idx+1 < len(parts): return parts[idx+1]
+            if idx+1<len(parts): return parts[idx+1]
     base=Path(urlparse(url).path).name
     return base.split("~",1)[0].split("_",1)[0]
 
 def resolve_nasa_large(url):
     url=str(url).replace("http://images-assets.nasa.gov","https://images-assets.nasa.gov")
     if "images-assets.nasa.gov" not in url: return url
-    asset_id=nasa_asset_id(url)
-    r=requests.get(f"https://images-api.nasa.gov/asset/{asset_id}",headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"},timeout=(15,30)); r.raise_for_status()
-    items=r.json().get("collection",{}).get("items",[])
+    asset_id=nasa_asset_id(url); headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"}
+    api=f"https://images-api.nasa.gov/asset/{asset_id}"
+    r=requests.get(api,headers=headers,timeout=(15,30))
+    if r.status_code==404:
+        q=asset_id.split("_",1)[0] if asset_id.startswith("jsc") else asset_id
+        sr=requests.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video"},headers=headers,timeout=(15,30)); sr.raise_for_status()
+        hits=sr.json().get("collection",{}).get("items",[]); nasa_ids=[]
+        for hit in hits:
+            data=hit.get("data") or []
+            if data and data[0].get("nasa_id"): nasa_ids.append(str(data[0]["nasa_id"]))
+        exact=[x for x in nasa_ids if x.lower().startswith(q.lower())]
+        if exact: asset_id=exact[0]
+        elif nasa_ids: asset_id=nasa_ids[0]
+        else: raise RuntimeError(f"NASA asset search returned no result for {q}")
+        r=requests.get(f"https://images-api.nasa.gov/asset/{asset_id}",headers=headers,timeout=(15,30))
+    r.raise_for_status(); items=r.json().get("collection",{}).get("items",[])
     hrefs=[str(x.get("href","")).replace("http://","https://") for x in items if x.get("href")]
     videos=[h for h in hrefs if re.search(r"\.(mp4|mov|m4v)$",h,re.I)]
     preferred=[h for h in videos if re.search(r"~large\.(mp4|mov|m4v)$",h,re.I)]
@@ -73,11 +84,11 @@ def weight(word):
     if re.search(r"[.!?]$",word): base+=0.35
     elif re.search(r"[,;:]$",word): base+=0.18
     return base
-def build_word_times(words,total_duration):
-    weights=[weight(w) for w in words]; usable=max(0.5,total_duration-0.10); unit=usable/max(sum(weights),1.0); out=[]; t=0.03
+def build_word_times(words,total):
+    weights=[weight(w) for w in words]; usable=max(0.5,total-0.10); unit=usable/max(sum(weights),1.0); out=[]; t=0.03
     for i,(w,wt) in enumerate(zip(words,weights)):
-        start=t; end=min(total_duration-0.02,start+wt*unit)
-        if i==len(words)-1: end=max(end,total_duration-0.02)
+        start=t; end=min(total-0.02,start+wt*unit)
+        if i==len(words)-1: end=max(end,total-0.02)
         out.append((w,start,max(start+0.04,end))); t=end
     return out
 def build_ass(words_timed):
@@ -114,9 +125,8 @@ if any(float(s.get("semantic_score",0))<90 for s in scenes): raise RuntimeError(
 download(AUDIO_URL,AUDIO_PATH); audio_duration=ffprobe_duration(AUDIO_PATH)
 if not (5.0<=audio_duration<=60.0): raise RuntimeError(f"Unexpected narration duration: {audio_duration}")
 download(WATERMARK_URL,WM_PATH)
-words=tokenize(SCRIPT); word_times=build_word_times(words,audio_duration); build_ass(word_times)
-scene_weights=[max(1,len(tokenize(s.get("spoken_phrase","")))) for s in scenes]; weight_sum=sum(scene_weights)
-durations=[audio_duration*w/weight_sum for w in scene_weights]
+words=tokenize(SCRIPT); build_ass(build_word_times(words,audio_duration))
+scene_weights=[max(1,len(tokenize(s.get("spoken_phrase","")))) for s in scenes]; weight_sum=sum(scene_weights); durations=[audio_duration*w/weight_sum for w in scene_weights]
 if durations: durations[-1]+=audio_duration-sum(durations)
 resolved=[resolve_nasa_large(s["source_url"]) for s in scenes]
 local_sources=[]
