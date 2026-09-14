@@ -16,12 +16,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-      - name: Apply deterministic renderer hotfix
+      - name: Apply renderer hotfix
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re, textwrap
 
           p = Path("render.py")
           s = p.read_text(encoding="utf-8")
@@ -31,26 +30,27 @@ jobs:
               'gs=(i//3)*3; ge=min(gs+3,n); parts=[]'
           )
 
-          pattern = re.compile(
-              r'cmd=\["ffmpeg","-hide_banner","-loglevel","error","-y"\]\n'
-              r'for path in vertical_clips:.*='
-              r'run\(cmd,timeout=180\)\n',
-              re.S
-          )
+          start_marker = 'cmd=["ffmpeg","-hide_banner","-loglevel","error","-y"]\nfor path in vertical_clips:'
+          end_marker = 'run(cmd,timeout=180)\n'
+          start = s.find(start_marker)
+          if start < 0:
+              raise SystemExit("Final renderer start marker not found")
+          end0 = s.find(end_marker, start)
+          if end0 < 0:
+              raise SystemExit("Final renderer end marker not found")
+          end = end0 + len(end_marker)
 
-          replacement = '''concat_path=OUT/"concat.txt"
-          joined_path=OUT/"joined.mp4"
-          concat_path.write_text("".join(f"file '{p.resolve().as_posix()}'\\nf" for p in vertical_clips),encoding="utf-8")
-          run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",str(concat_path),"-c","copy","-movflags","+faststart",str(joined_path)],timeout=60)
-          final_filter=f"[1:v]scale=48:-1:flags=lanczos,format=rgba[wm];[0:v][wm]overlay=W-w-52:H-h-78:eof_action=repeat:repeatlast=1[branded];[branded]ass={ASS_PATH.as_posix()}[finalv]"
-          run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(joined_path),"-i",str(WM_PATH),"-i",str(AUDIO_PATH),"-filter_complex",final_filter,"-map","[finalv]","-map","2:a:0","-t",f"{audio_duration:.3f}","-c:v","libx264","-preset","superfast","-crf","16","-pix_fmt","yuv420p","-profile:v","high","-level","4.2","-c:a","aac","-b:a","192k","-movflags","+faststart",str(VIDEO_OUT)],timeout=150)
-          '''
-          replacement = textwrap.dedent(replacement)
-          s2, n = pattern.subn(replacement, s, count=1)
-          if n != 1:
-              raise SystemExit(f"Expected one final-render block, patched {n}")
-
-          p.write_text(s2, encoding="utf-8")
+          replacement_lines = [
+              'concat_path=OUT/"concat.txt"',
+              'joined_path=OUT/"joined.mp4"',
+              'concat_path.write_text("\\n".join("file " + repr(str(p.resolve())) for p in vertical_clips) + "\\n",encoding="utf-8")',
+              'run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",str(concat_path),"-c","copy","-movflags","+faststart",str(joined_path)],timeout=60)',
+              'final_filter=f"[1:v]scale=48:-1:flags=lanczos,format=rgba[wm];[0:v][wm]overlay=W-w-52:H-h-78:eof_action=repeat:repeatlast=1[branded];[branded]ass={ASS_PATH.as_posix()}[finalv]"',
+              'run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(joined_path),"-i",str(WM_PATH),"-i",str(AUDIO_PATH),"-filter_complex",final_filter,"-map","[finalv]","-map","2:a:0","-t",f"{audio_duration:.3f}","-c:v","libx264","-preset","superfast","-crf","16","-pix_fmt","yuv420p","-profile:v","high","-level","4.2","-c:a","aac","-b:a","192k","-movflags","+faststart",str(VIDEO_OUT)],timeout=150)',
+          ]
+          replacement = "\n".join(replacement_lines) + "\n"
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s, encoding="utf-8")
           PY
           python -m py_compile render.py
       - name: Commit hotfix
