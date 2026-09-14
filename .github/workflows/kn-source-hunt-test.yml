@@ -1,0 +1,54 @@
+name: KN Source Hunt Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      content_id:
+        required: true
+        type: string
+      scene_brief:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install requests==2.32.5 Pillow==11.3.0
+
+      - name: Find and QC NASA motion clips
+        env:
+          KN_SCENE_BRIEF: $
+        run: python source_hunter.py
+
+      - name: Publish source manifest
+        id: release
+        env:
+          GH_TOKEN: $
+          CONTENT_ID: $
+        run: |
+          SAFE_ID="$(printf '%s' "$CONTENT_ID" | tr -c 'A-Za-z0-9_-' '_')"
+          TAG="kn-source-${SAFE_ID}-${GITHUB_RUN_ID}"
+          gh release create "$TAG" "output/source_manifest.json#source_manifest.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "KN source manifest ${CONTENT_ID}" \
+            --notes "Temporary Knowledge Nuggets source-hunt result."
+          URL="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[0].url')"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
