@@ -125,7 +125,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
     events=[]; n=len(words_timed)
     for i,(_,start,end) in enumerate(words_timed):
-        gs=(i//4)*4; ge=min(gs+4,n); parts=[]
+        gs=(i//3)*3; ge=min(gs+3,n); parts=[]
         for j in range(gs,ge):
             txt=ass_escape(words_timed[j][0]); parts.append((r"{\c&H00008AFF&}"+txt+r"{\c&H00FFFFFF&}") if j==i else txt)
         events.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Main,,0,0,0,,{' '.join(parts)}")
@@ -202,28 +202,12 @@ for i,(scene,dur,candidates) in enumerate(zip(scenes,durations,candidate_sets)):
     else:
         raise RuntimeError(f"Scene {i+1} could not be prepared from any candidate: {last_error}")
 
-cmd=["ffmpeg","-hide_banner","-loglevel","error","-y"]
-for path in vertical_clips:
-    cmd += ["-i",str(path)]
-wm_idx=len(scenes)
-audio_idx=wm_idx+1
-cmd += ["-loop","1","-i",str(WM_PATH),"-i",str(AUDIO_PATH)]
-labels="".join(f"[{i}:v]" for i in range(len(scenes)))
-filters=[
-    labels+f"concat=n={len(scenes)}:v=1:a=0[base]",
-    f"[{wm_idx}:v]scale=48:-1[wm]",
-    "[base][wm]overlay=W-w-52:H-h-78:shortest=1[branded]",
-    f"[branded]ass={ASS_PATH.as_posix()}[finalv]"
-]
-cmd += [
-    "-filter_complex",";".join(filters),
-    "-map","[finalv]","-map",f"{audio_idx}:a:0",
-    "-t",f"{audio_duration:.3f}",
-    "-c:v","libx264","-preset","veryfast","-crf","18",
-    "-pix_fmt","yuv420p","-profile:v","high","-level","4.2",
-    "-c:a","aac","-b:a","192k","-movflags","+faststart",str(VIDEO_OUT)
-]
-run(cmd,timeout=180)
+concat_path=OUT/"concat.txt"
+joined_path=OUT/"joined.mp4"
+concat_path.write_text("\n".join("file " + repr(str(p.resolve())) for p in vertical_clips) + "\n",encoding="utf-8")
+run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",str(concat_path),"-c","copy","-movflags","+faststart",str(joined_path)],timeout=60)
+final_filter=f"[1:v]scale=48:-1:flags=lanczos,format=rgba[wm];[0:v][wm]overlay=W-w-52:H-h-78:eof_action=repeat:repeatlast=1[branded];[branded]ass={ASS_PATH.as_posix()}[finalv]"
+run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(joined_path),"-i",str(WM_PATH),"-i",str(AUDIO_PATH),"-filter_complex",final_filter,"-map","[finalv]","-map","2:a:0","-t",f"{audio_duration:.3f}","-c:v","libx264","-preset","superfast","-crf","16","-pix_fmt","yuv420p","-profile:v","high","-level","4.2","-c:a","aac","-b:a","192k","-movflags","+faststart",str(VIDEO_OUT)],timeout=150)
 render_duration=ffprobe_duration(VIDEO_OUT); issues=[]
 if abs(render_duration-audio_duration)>0.35: issues.append("duration_mismatch")
 if VIDEO_OUT.stat().st_size<500000: issues.append("render_file_too_small")
