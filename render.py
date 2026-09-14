@@ -1,7 +1,8 @@
-import os,json,re,subprocess,requests,time
+import os,json,re,subprocess,requests,time,csv,io
 from pathlib import Path
 from urllib.parse import urlparse,unquote
 from faster_whisper import WhisperModel
+from PIL import Image,ImageFilter,ImageStat
 CID=os.environ["KN_CONTENT_ID"]; SCRIPT=os.environ["KN_SCRIPT"]; PKG=json.loads(os.environ["KN_RENDER_PACKAGE"]); AUDIO=os.environ["KN_AUDIO_URL"]; WM=os.environ["KN_WATERMARK_URL"]
 W=Path("work"); O=Path("output"); W.mkdir(exist_ok=True); O.mkdir(exist_ok=True)
 def sh(cmd):
@@ -54,7 +55,7 @@ WrapStyle: 2
 ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: KN,DejaVu Sans,60,&H00FFFFFF,&H00008AFF,&H00101010,&H00000000,-1,0,0,0,100,100,0,0,1,2.3,0,2,120,120,405,1
+Style: KN,DejaVu Sans,60,&H00FFFFFF,&H00008AFF,&H00101010,&H00000000,-1,0,0,0,100,100,0,0,1,2.2,0,2,120,120,415,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
@@ -67,6 +68,42 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
    txt.append(z)
   out.append(f"Dialogue: 0,{tm(st)},{tm(max(en,st+.12))},KN,,0,0,0,,{' '.join(txt)}")
  path.write_text(head+"\n".join(out),encoding="utf-8"); return len(words)
+
+def cropf(cp,w=1080,h=1920):
+ x="0" if cp=="LEFT" else "iw-ow" if cp=="RIGHT" else "(iw-ow)/2"
+ return f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:{x}:(ih-oh)/2,setsar=1,fps=30"
+def preview(p,t,cp,i,n):
+ q=W/f"qc_{i}_{n}.png"; sh(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{t:.3f}","-i",str(p),"-frames:v","1","-vf",cropf(cp,360,640),str(q)]); return q
+def frame_stats(p):
+ with Image.open(p) as im:
+  g=im.convert("L"); st=ImageStat.Stat(g); e=g.filter(ImageFilter.FIND_EDGES)
+  return {"mean":round(st.mean[0],2),"std":round(st.stddev[0],2),"entropy":round(g.entropy(),3),"edge":round(ImageStat.Stat(e).mean[0],2)}
+def ocr_risk(p):
+ r=subprocess.run(["tesseract",str(p),"stdout","--psm","11","tsv"],text=True,capture_output=True)
+ if r.returncode or not r.stdout.strip(): return {"risk":False,"text":"","area":0,"maxw":0}
+ rows=csv.DictReader(io.StringIO(r.stdout),delimiter="\t"); txt=[]; area=0; mw=0
+ for z in rows:
+  try:
+   if z.get("level")!="5" or float(z.get("conf","-1"))<55: continue
+   t=(z.get("text") or "").strip()
+   if len(re.sub(r"\W","",t))<2: continue
+   w=int(z.get("width") or 0); h=int(z.get("height") or 0); txt.append(t); area+=w*h; mw=max(mw,w)
+  except: pass
+ j=" ".join(txt); ar=area/(360*640); wr=mw/360
+ bad=any(x in j.lower() for x in ("live event","starts soon","live stream","news conference","press conference","countdown","breaking news","presentation"))
+ return {"risk":bad or ar>.028 or wr>.50,"text":j[:160],"area":round(ar,4),"maxw":round(wr,3)}
+def frame_qc(p,ln,sd,cp,i,reuse):
+ base=min(8*reuse,max(0,ln-sd)); rs=[]
+ for n,f in enumerate((.18,.5,.82),1):
+  t=min(base+sd*f,max(0,ln-.15)); q=preview(p,t,cp,i,n); st=frame_stats(q); oc=ocr_risk(q); rs.append({"sample":n,"offset":round(t,3),**st,"ocr":oc})
+ blank=sum(1 for r in rs if (r["std"]<13 and r["entropy"]<4.25) or (r["edge"]<4.5 and (r["mean"]>235 or r["mean"]<18)))
+ soft=sum(1 for r in rs if r["edge"]<5.2 and r["entropy"]<5.1)
+ if blank>=2: raise RuntimeError(f"POST_CROP_COMPOSITION_FAIL_{i}_{blank}of3")
+ if soft>=3: raise RuntimeError(f"SOURCE_SHARPNESS_FAIL_{i}_{soft}of3")
+ bad=[r["ocr"]["text"] for r in rs if r["ocr"]["risk"]]
+ if bad: raise RuntimeError(f"EMBEDDED_TEXT_OR_SLATE_FAIL_{i}_{' | '.join(bad)[:200]}")
+ return rs
+
 if PKG.get("production_status")!="READY": raise RuntimeError("PACKAGE_NOT_READY")
 sc=PKG.get("scenes") or []
 if not sc or not WM: raise RuntimeError("MISSING_SCENES_OR_WATERMARK")
@@ -77,6 +114,8 @@ audio=get(AUDIO,"narration"); ad=dur(audio)
 weights=[max(1,len(str(x.get("spoken_phrase","")).split())) for x in sc]; sw=sum(weights); ds=[ad*w/sw for w in weights]
 cache={}; sources=[]; qc=[]
 for i,(s,sd) in enumerate(zip(sc,ds),1):
+ if float(s.get("semantic_score") or 0)<88: raise RuntimeError(f"LOW_SEMANTIC_SCORE_{i}")
+ if float(s.get("visual_quality_score") or 0)<88: raise RuntimeError(f"LOW_VISUAL_QUALITY_SCORE_{i}")
  u=s["source_url"]; b=blocked(u)
  if b: raise RuntimeError(f"SOURCE_TITLE_REJECTED_{i}_{b}")
  if u not in cache:
@@ -86,7 +125,8 @@ for i,(s,sd) in enumerate(zip(sc,ds),1):
  if h>w and (w<1080 or h<1920): raise RuntimeError(f"LOW_RES_PORTRAIT_{i}_{w}x{h}")
  cp=str(s.get("crop_preference") or "CENTER").upper()
  if cp not in ("LEFT","CENTER","RIGHT"):cp="CENTER"
- sources.append((p,w,h,ln,cp)); qc.append({"scene":i,"source_width":w,"source_height":h,"crop_preference":cp})
+ reuse=sum(1 for z in sources if z[0]==p); fq=frame_qc(p,ln,sd,cp,i,reuse)
+ sources.append((p,w,h,ln,cp)); qc.append({"scene":i,"source_width":w,"source_height":h,"crop_preference":cp,"frame_qc":fq})
 ass=W/"subs.ass"; wc=subs(audio,ass); wm=get(WM,"watermark")
 cmd=["ffmpeg","-hide_banner","-y"]; uses={}
 for (p,w,h,ln,cp),sd in zip(sources,ds):
@@ -95,18 +135,18 @@ for (p,w,h,ln,cp),sd in zip(sources,ds):
 wi=len(sources); ai=wi+1; cmd+=["-loop","1","-i",str(wm),"-i",str(audio)]
 f=[]; labs=[]
 for i,((p,w,h,ln,cp),sd) in enumerate(zip(sources,ds)):
- x="0" if cp=="LEFT" else "iw-ow" if cp=="RIGHT" else "(iw-ow)/2"; lab=f"v{i}"
- f.append(f"[{i}:v]trim=duration={sd:.3f},setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:{x}:(ih-oh)/2,setsar=1,fps=30[{lab}]"); labs.append(f"[{lab}]")
+ lab=f"v{i}"
+ f.append(f"[{i}:v]trim=duration={sd:.3f},setpts=PTS-STARTPTS,{cropf(cp)}[{lab}]"); labs.append(f"[{lab}]")
 f.append("".join(labs)+f"concat=n={len(labs)}:v=1:a=0[vcat]")
 aa=str(ass.resolve()).replace(":","\\:")
-f.append(f"[vcat]ass='{aa}'[vs]"); f.append(f"[{wi}:v]scale=72:-1,format=rgba,colorchannelmixer=aa=.72[wm]"); f.append("[vs][wm]overlay=(W-w)/2:H-h-54[v]")
+f.append(f"[vcat]ass='{aa}'[vs]"); f.append(f"[{wi}:v]scale=72:-1:flags=lanczos,format=rgba,colorchannelmixer=aa=.78[wm]"); f.append("[vs][wm]overlay=(W-w)/2:H-h-54[v]")
 safe=re.sub(r"[^A-Za-z0-9_-]+","_",CID)[:80] or "kn"; out=O/f"{safe}.mp4"
-cmd+=["-filter_complex",";".join(f),"-map","[v]","-map",f"{ai}:a:0","-c:v","libx264","-preset","medium","-crf","17","-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-shortest","-movflags","+faststart",str(out)]
+cmd+=["-filter_complex",";".join(f),"-map","[v]","-map",f"{ai}:a:0","-c:v","libx264","-preset","slow","-crf","16","-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-shortest","-movflags","+faststart",str(out)]
 sh(cmd)
 fd=dur(out); p=json.loads(sh(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=width,height,codec_name","-of","json",str(out)]))["streams"][0]
 issues=[]
 if p.get("width")!=1080 or p.get("height")!=1920:issues.append("wrong_dimensions")
-if p.get("codec_name")!="h264":isssues.append("codec")
+if p.get("codec_name")!="h264":issues.append("codec")
 if abs(fd-ad)>1:issues.append("duration")
-q={"content_id":CID,"status":"RENDER_READY" if not issues else "RENDER_QC_FAILED","duration_seconds":round(fd,3),"technical_qc_score":100 if not issues else 70,"content_qc_score":100 if wc>=max(3,int(len(SERIPT.split())*.7)) else 80,"word_timestamps":wc,"motion_scenes":len(sc),"unique_motion_sources":len(cache),"watermark":"BRAIN_NUGGET_APPLIED","watermark_width_px":72,"subtitle_layout":"KN_FIXED_V2_3TO4_WORDS_SAFE","subtitle_margin_v":405,"source_qc":qc,"render_mode":"SINGLE_PASS_FINAL_ENCODE","issues":issues}
-(O/"qc.json").write_text(json.dumps(q),encoding="utf-8"); print(json.dumps(q)
+q={"content_id":CID,"status":"RENDER_READY" if not issues else "RENDER_QC_FAILED","duration_seconds":round(fd,3),"technical_qc_score":100 if not issues else 70,"content_qc_score":100 if wc>=max(3,int(len(SCRIPT.split())*.7)) else 80,"word_timestamps":wc,"motion_scenes":len(sc),"unique_motion_sources":len(cache),"watermark":"BRAIN_NUGGET_APPLIED","watermark_width_px":72,"subtitle_layout":"KN_FIXED_V3_3TO4_WORDS_FRAME_QC","subtitle_margin_v":415,"source_qc":qc,"render_mode":"ONE_PASS_H264_FINAL_ENCODE","issues":issues}
+(O/"qc.json").write_text(json.dumps(q),encoding="utf-8"); print(json.dumps(q))
