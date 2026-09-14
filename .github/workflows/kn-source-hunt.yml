@@ -1,0 +1,71 @@
+name: KN Source Hunt
+
+on:
+  workflow_dispatch:
+    inputs:
+      content_id:
+        required: true
+        type: string
+      scene_brief:
+        required: true
+        type: string
+      callback_url:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install requests==2.32.5 Pillow==11.3.0
+
+      - name: Find and QC NASA motion clips
+        run: |
+          SCENE_BRIEF="$(jq -r '.inputs.scene_brief' "$GITHUB_EVENT_PATH")"
+          KN_SCENE_BRIEF="$SCENE_BRIEF" python source_hunter.py
+
+      - name: Callback to Make
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          event=json.load(open(os.environ['GITHUB_EVENT_PATH'],'r',encoding='utf-8'))
+          url=event['inputs']['callback_url']
+          cid=event['inputs']['content_id']
+          manifest=json.load(open('output/source_manifest.json','r',encoding='utf-8'))
+          selected=[x for x in manifest if x.get('status')=='SELECTED']
+          unique=len({x.get('direct_download_url') for x in selected if x.get('direct_download_url')})
+          scores=[]
+          for x in selected:
+              scores.extend([float(x.get('semantic_score') or 0),float(x.get('visual_quality_score') or 0)])
+          quality=round(sum(scores)/len(scores)) if scores else 0
+          ready=len(selected)==len(manifest) and len(manifest)>0 and unique>=max(1,len(manifest)-1) and quality>=88
+          payload={
+              'content_id':cid,
+              'status':'VISUALS_READY' if ready else 'VISUALS_INCOMPLETE',
+              'visual_manifest':manifest,
+              'coverage_score':round(100*len(selected)/len(manifest)) if manifest else 0,
+              'quality_score':quality,
+              'rights_status':'PASS' if ready else 'INCOMPLETE',
+              'decision_reason':'All scenes passed deterministic NASA source/QC gates.' if ready else 'One or more scenes failed deterministic NASA source/QC gates.',
+              'unique_sources':unique
+          }
+          req=urllib.request.Request(url,data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
+          with urllib.request.urlopen(req,timeout=30) as r:
+              print(r.status,r.read().decode('utf-8','replace'))
+          PY
