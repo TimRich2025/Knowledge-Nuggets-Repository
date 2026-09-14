@@ -6,7 +6,7 @@ from PIL import Image,ImageStat,ImageFilter
 B=json.loads(os.environ['KN_SCENE_BRIEF'])
 O=Path('output'); O.mkdir(exist_ok=True)
 BAD=('live video','official stream','live stream','livestream','live event','event starts','news conference','press conference','countdown','webinar','presentation','title card','broadcast','briefing','coverage')
-STOP=set('the a an and or of to in on at by for from with is are was were be can this that it its after before during'.split())
+STOP=set('the a an and or of to in on at by for from with is are was were be can this that it its after before during real clearly visible video footage clip nasa astronaut astronauts space station crew'.split())
 
 def run(c,t=60):
     p=subprocess.run(c,text=True,capture_output=True,timeout=t)
@@ -105,7 +105,7 @@ extra={
 5:['astronaut exercise ISS NASA','astronaut treadmill space station NASA','astronaut exercise space station NASA','astronaut physical therapy NASA']
 }
 
-R=[]; used=set()
+R=[]; POOLS=[]; used=set()
 for s in B:
     sn=s.get('scene'); cs=[]; seen=set()
     queries=list(s.get('search_queries')or[])+extra.get(sn,[])
@@ -120,7 +120,7 @@ for s in B:
             metadata=((d.get('title')or'')+' '+(d.get('description')or'')+' '+' '.join(d.get('keywords')or[])).lower()
             if not any(k in metadata for k in ('astronaut','space station','iss','spaceflight','crew','microgravity')): continue
             sc=semantic(s,d,rank)
-            if sc<88: continue
+            if sc<80: continue
             try: us=vids(assets(nid))
             except Exception: continue
             for u in us[:3]:
@@ -131,18 +131,19 @@ for s in B:
                 cp,fq=layout_qc(u,p['duration'],f's{sn}_{len(cs)}',mode)
                 if not cp: continue
                 cs.append({
-                    'scene':sn,'spoken_phrase':s.get('spoken_phrase',''),'nasa_id':nid,'title':title,
+                    'scene':sn,'spoken_phrase':s.get('spoken_phrase',''),'nasa_id':nid,'title':title,'description':(d.get('description')or'')[:500],'keywords':(d.get('keywords')or[])[:20],
                     'selected_asset_page_url':'https://images.nasa.gov/details/'+quote(nid),
                     'direct_download_url':u,'source':'NASA Image and Video Library',
                     'license':'NASA U.S. Government media','rights_status':'PASS','media_type':'VIDEO',
                     'width':p['width'],'height':p['height'],'duration':round(p['duration'],2),
-                    'semantic_score':sc,'visual_quality_score':qs,'cleaness_status':'PASS','crop_status':'PASS',
+                    'semantic_score':sc,'visual_quality_score':qs,'cleanliness_status':'PASS','crop_status':'PASS',
                     'layout_mode':mode,'crop_preference':cp,'frame_qc':fq,
                     'reason':'Verified NASA API motion asset: '+title[:100]
                 })
                 break
         if len(cs)>=8: break
     cs.sort(key=lambda x:(x['nasa_id'] in used,-x['semantic_score'],-x['visual_quality_score'],-x['frame_qc'].get('score',0)))
+    POOLS.append({'scene':sn,'spoken_phrase':s.get('spoken_phrase',''),'candidates':cs[:6]})
     pick=next((c for c in cs if c['semantic_score']>=88 and c['visual_quality_score']>=88 and c['nasa_id'] not in used),None)
     if pick is None:
         pick=next((c for c in cs if c['semantic_score']>=88 and c['visual_quality_score']>=88),None)
@@ -152,4 +153,5 @@ for s in B:
         R.append({'scene':sn,'spoken_phrase':s.get('spoken_phrase',''),'status':'MISSING','reason':'No NASA API candidate passed semantic, resolution, frame and overlay QC'})
 
 Path('output/source_manifest.json').write_text(json.dumps(R,indent=2),encoding='utf-8')
-print(json.dumps(R))
+Path('output/candidate_pools.json').write_text(json.dumps(POOLS,indent=2),encoding='utf-8')
+print(json.dumps({'selected_manifest':R,'candidate_pools':POOLS}))
