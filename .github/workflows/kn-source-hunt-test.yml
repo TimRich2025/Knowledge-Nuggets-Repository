@@ -11,7 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   hunt:
@@ -33,22 +33,19 @@ jobs:
       - run: pip install requests==2.32.5 Pillow==11.3.0
 
       - name: Find and QC NASA motion clips
-        env:
-          KN_SCENE_BRIEF: $
-        run: python source_hunter.py
-
-      - name: Publish source manifest
-        id: release
-        env:
-          GH_TOKEN: $
-          CONTENT_ID: $
         run: |
-          SAFE_ID="$(printf '%s' "$CONTENT_ID" | tr -c 'A-Za-z0-9_-' '_')"
-          TAG="kn-source-${SAFE_ID}-${GITHUB_RUN_ID}"
-          gh release create "$TAG" "output/source_manifest.json#source_manifest.json" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "KN source manifest ${CONTENT_ID}" \
-            --notes "Temporary Knowledge Nuggets source-hunt result."
-          URL="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[0].url')"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import json, os, subprocess
+          with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as f:
+              event = json.load(f)
+          env = os.environ.copy()
+          env["KN_SCENE_BRIEF"] = event["inputs"]["scene_brief"]
+          subprocess.run(["python", "source_hunter.py"], check=True, env=env)
+          PY
+
+      - name: Upload source manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-manifest
+          path: output/source_manifest.json
+          retention-days: 1
