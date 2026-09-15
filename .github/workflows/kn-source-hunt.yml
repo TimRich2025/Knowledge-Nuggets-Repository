@@ -31,19 +31,15 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg tesseract-ocr
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-
       - run: pip install requests==2.32.5 Pillow==11.3.0
-
       - name: Find and QC topic-matched motion clips
         id: source_hunt
         continue-on-error: true
@@ -62,11 +58,14 @@ jobs:
           print(f'Loaded {len(data)} scenes successfully')
           PY
           python source_hunter.py
-
+      - name: Reject duplicate source variants and find replacements
+        if: steps.source_hunt.outcome == 'success'
+        id: dedupe
+        continue-on-error: true
+        run: python source_dedupe.py
       - name: Build creative visual and sound direction
         if: always()
         run: python visual_director.py
-
       - name: Upload source and visual plans for review
         if: always()
         uses: actions/upload-artifact@v4
@@ -78,7 +77,6 @@ jobs:
             output/visual_plan.json
           if-no-files-found: warn
           retention-days: 7
-
       - name: Report gate result
         if: always()
         run: |
@@ -88,9 +86,8 @@ jobs:
           if not p.exists(): raise SystemExit('Source hunter did not create source_gate.json')
           gate=json.load(open(p,'r',encoding='utf-8'))
           print(json.dumps(gate,indent=2))
-          if not gate.get('ready'): raise SystemExit('Topic-matched source gate is not ready. Review the uploaded production plan.')
+          if not gate.get('ready'): raise SystemExit('Topic/source-family gate is not ready. Review the uploaded production plan.')
           PY
-
       - name: Callback to Make
         if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.callback_url != '' }}
         env:
@@ -102,10 +99,7 @@ jobs:
           gate=json.load(open('output/source_gate.json','r',encoding='utf-8'))
           plan=json.load(open('output/visual_plan.json','r',encoding='utf-8'))
           selected=[x for x in manifest if x.get('status')=='SELECTED']
-          payload={'content_id':os.environ['CONTENT_ID'],'status':'VISUALS_READY','visual_manifest':manifest,'visual_plan':plan,
-                   'coverage_score':round(100*len(selected)/len(manifest)) if manifest else 0,
-                   'quality_score':round(sum(float(x.get('visual_quality_score') or 0) for x in selected)/len(selected)) if selected else 0,
-                   'rights_status':'PASS','unique_sources':gate['unique_sources'],'minimum_unique_sources':gate['minimum_unique_sources']}
+          payload={'content_id':os.environ['CONTENT_ID'],'status':'VISUALS_READY','visual_manifest':manifest,'visual_plan':plan,'coverage_score':round(100*len(selected)/len(manifest)) if manifest else 0,'quality_score':round(sum(float(x.get('visual_quality_score') or 0) for x in selected)/len(selected)) if selected else 0,'rights_status':'PASS','unique_sources':gate['unique_sources'],'minimum_unique_sources':gate['minimum_unique_sources']}
           req=urllib.request.Request(os.environ['CALLBACK_URL'],data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
           with urllib.request.urlopen(req,timeout=30) as r: print(r.status,r.read().decode('utf-8','replace'))
           PY
