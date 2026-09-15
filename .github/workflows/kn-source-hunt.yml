@@ -7,7 +7,9 @@ on:
         required: true
         type: string
       scene_brief:
-        required: true
+        required: false
+        default: ""
+        description: "Optional short JSON. KN-ASTRONAUT-V4 uses the repository preset automatically."
         type: string
       callback_url:
         required: false
@@ -38,8 +40,21 @@ jobs:
 
       - name: Find, QC and select unique motion clips
         env:
-          KN_SCENE_BRIEF: ${{ inputs.scene_brief }}
-        run: python source_hunter.py
+          CONTENT_ID: ${{ inputs.content_id }}
+          INPUT_SCENE_BRIEF: ${{ inputs.scene_brief }}
+        run: |
+          if [ "$CONTENT_ID" = "KN-ASTRONAUT-V4" ]; then
+            export KN_SCENE_BRIEF="$(cat presets/astronaut_v4.json)"
+          else
+            export KN_SCENE_BRIEF="$INPUT_SCENE_BRIEF"
+          fi
+          python - <<'PY'
+          import json, os
+          data=json.loads(os.environ['KN_SCENE_BRIEF'])
+          assert isinstance(data,list) and data, 'scene brief must be a non-empty JSON array'
+          print(f'Loaded {len(data)} scenes successfully')
+          PY
+          python source_hunter.py
 
       - name: Upload source manifest for review
         if: always()
