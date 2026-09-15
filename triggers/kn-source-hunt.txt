@@ -1,3 +1,3 @@
 KN-ASTRONAUT-V4
-trigger=2026-09-15T20:54:00+02:00
-reason=stable-asset-family-dedupe-v2
+trigger=2026-09-15T21:20:00+02:00
+reason=fullscreen-beat-audio-director-v1
