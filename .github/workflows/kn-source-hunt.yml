@@ -15,9 +15,15 @@ on:
         required: false
         default: ""
         type: string
+  push:
+    paths:
+      - "triggers/kn-source-hunt.txt"
 
 permissions:
   contents: read
+
+env:
+  CONTENT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.content_id || 'KN-ASTRONAUT-V4' }}
 
 jobs:
   hunt:
@@ -42,7 +48,6 @@ jobs:
         id: source_hunt
         continue-on-error: true
         env:
-          CONTENT_ID: ${{ inputs.content_id }}
           INPUT_SCENE_BRIEF: ${{ inputs.scene_brief }}
         run: |
           if [ "$CONTENT_ID" = "KN-ASTRONAUT-V4" ]; then
@@ -66,7 +71,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kn-production-plan-${{ inputs.content_id }}
+          name: kn-production-plan-${{ env.CONTENT_ID }}
           path: |
             output/source_manifest.json
             output/source_gate.json
@@ -87,10 +92,9 @@ jobs:
           PY
 
       - name: Callback to Make
-        if: ${{ success() && inputs.callback_url != '' }}
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.callback_url != '' }}
         env:
           CALLBACK_URL: ${{ inputs.callback_url }}
-          CONTENT_ID: ${{ inputs.content_id }}
         run: |
           python - <<'PY'
           import json, os, urllib.request
