@@ -66,6 +66,9 @@ jobs:
       - name: Build creative visual and sound direction
         if: always()
         run: python visual_director.py
+      - name: Build fullscreen beat and audio direction
+        if: always()
+        run: python fullscreen_director.py
       - name: Upload source and visual plans for review
         if: always()
         uses: actions/upload-artifact@v4
@@ -75,6 +78,7 @@ jobs:
             output/source_manifest.json
             output/source_gate.json
             output/visual_plan.json
+            output/fullscreen_plan.json
           if-no-files-found: warn
           retention-days: 7
       - name: Report gate result
@@ -97,9 +101,9 @@ jobs:
           import json, os, urllib.request
           manifest=json.load(open('output/source_manifest.json','r',encoding='utf-8'))
           gate=json.load(open('output/source_gate.json','r',encoding='utf-8'))
-          plan=json.load(open('output/visual_plan.json','r',encoding='utf-8'))
+          plan=json.load(open('output/fullscreen_plan.json','r',encoding='utf-8'))
           selected=[x for x in manifest if x.get('status')=='SELECTED']
-          payload={'content_id':os.environ['CONTENT_ID'],'status':'VISUALS_READY','visual_manifest':manifest,'visual_plan':plan,'coverage_score':round(100*len(selected)/len(manifest)) if manifest else 0,'quality_score':round(sum(float(x.get('visual_quality_score') or 0) for x in selected)/len(selected)) if selected else 0,'rights_status':'PASS','unique_sources':gate['unique_sources'],'minimum_unique_sources':gate['minimum_unique_sources']}
+          payload={'content_id':os.environ['CONTENT_ID'],'status':'FULLSCREEN_PLAN_READY','visual_manifest':manifest,'visual_plan':plan,'coverage_score':round(100*len(selected)/len(manifest)) if manifest else 0,'quality_score':round(sum(float(x.get('visual_quality_score') or 0) for x in selected)/len(selected)) if selected else 0,'rights_status':'PASS','unique_sources':gate['unique_sources'],'minimum_unique_sources':gate['minimum_unique_sources']}
           req=urllib.request.Request(os.environ['CALLBACK_URL'],data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
           with urllib.request.urlopen(req,timeout=30) as r: print(r.status,r.read().decode('utf-8','replace'))
           PY
