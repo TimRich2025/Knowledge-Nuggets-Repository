@@ -49,16 +49,16 @@ def caption_filters(cards,dur,scene):
         size=82 if len(card)<=12 else 68
         col=ORANGE if ('3%' in card or card in ('GRAVITY','PRESSURE','STRETCHES','TALLER')) else 'white'
         fs.append(f"drawtext=fontfile={FONT}:text='{esc(card)}':fontcolor={col}:fontsize={size}:borderw=7:bordercolor=black@0.82:x=(w-text_w)/2:y=h*0.70:enable='between(t,{a:.2f},{z:.2f})'")
-    # Minimal explanatory graphics, intentionally restrained.
+    # drawbox does not reliably accept h/w aliases in all geometry fields; use iw/ih.
     if scene in (2,3):
-        fs += ["drawbox=x=w*0.47:y=h*0.30:w=10:h=h*0.25:color=0xFF7A18@0.85:t=fill",
-               "drawbox=x=w*0.40:y=h*0.40:w=w*0.20:h=8:color=white@0.75:t=fill"]
+        fs += ["drawbox=x=iw*0.47:y=ih*0.30:w=10:h=ih*0.25:color=0xFF7A18@0.85:t=fill",
+               "drawbox=x=iw*0.40:y=ih*0.40:w=iw*0.20:h=8:color=white@0.75:t=fill"]
     if scene==5:
-        fs += ["drawbox=x=w*0.15:y=h*0.22:w=8:h=h*0.42:color=0xFF7A18@0.9:t=fill",
-               "drawbox=x=w*0.13:y=h*0.22:w=50:h=7:color=white@0.9:t=fill",
-               "drawbox=x=w*0.13:y=h*0.64:w=50:h=7:color=white@0.9:t=fill"]
+        fs += ["drawbox=x=iw*0.15:y=ih*0.22:w=8:h=ih*0.42:color=0xFF7A18@0.9:t=fill",
+               "drawbox=x=iw*0.13:y=ih*0.22:w=50:h=7:color=white@0.9:t=fill",
+               "drawbox=x=iw*0.13:y=ih*0.64:w=50:h=7:color=white@0.9:t=fill"]
     if scene==6:
-        fs += ["drawbox=x=w*0.15:y=h*0.28:w=8:h=h*0.30:color=0xFF7A18@0.85:t=fill"]
+        fs += ["drawbox=x=iw*0.15:y=ih*0.28:w=8:h=ih*0.30:color=0xFF7A18@0.85:t=fill"]
     return fs
 
 for i,b in enumerate(plan['beats'],1):
