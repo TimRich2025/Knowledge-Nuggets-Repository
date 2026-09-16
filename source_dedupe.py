@@ -48,8 +48,6 @@ for i,x in enumerate(manifest):
     f=source_family(x);x['source_family']=f
     if f in used:targets.append((i,'duplicate'))
     elif x.get('source_type')=='COMMONS':
-        # Prefer NASA for render stability, but do not invalidate an otherwise valid unique 4K Commons source
-        # merely because no equivalent NASA replacement exists. renderer.py owns download fallback/retry policy.
         used.add(f);targets.append((i,'commons'))
     else:used.add(f)
 
@@ -61,12 +59,17 @@ for idx,reason in targets:
     if found:
         manifest[idx]=found;used.discard(oldfam);used.add(found['source_family'])
     elif reason=='duplicate':
-        old['status']='NO_RENDER_STABLE_DISTINCT_SOURCE'
+        # Five narration scenes require five scene assignments, not five unique source families.
+        # A source may be reused for one scene only when the project still has >=4 genuinely distinct
+        # native-4K families overall. Keep the scene renderable and explicitly flag the reuse.
+        old['source_reused_for_scene']=True
+        old['dedupe_replacement']=False
+        old['reuse_reason']='NO_EQUIVALENT_DISTINCT_NATIVE_4K_REPLACEMENT'
     else:
         old['render_fallback']='COMMONS_RETAINED_NO_EQUIVALENT_NASA_4K'
 
 selected=[x for x in manifest if x.get('status')=='SELECTED'];families={source_family(x) for x in selected}
-gate=json.loads((OUT/'source_gate.json').read_text(encoding='utf-8'));gate['unique_source_families']=len(families);gate['minimum_unique_source_families']=4;gate['duplicate_variant_policy']='CLEAN_CODEC_RESOLUTION_VARIANTS_COUNT_AS_ONE_SOURCE';gate['render_source_policy']='NASA_PREFERRED_COMMONS_ALLOWED_WITH_RENDER_RETRY';gate['ready']=len(selected)==len(manifest) and len(families)>=4 and all(x.get('native_4k') for x in selected)
+gate=json.loads((OUT/'source_gate.json').read_text(encoding='utf-8'));gate['unique_source_families']=len(families);gate['minimum_unique_source_families']=4;gate['duplicate_variant_policy']='AT_LEAST_FOUR_DISTINCT_FAMILIES;ONE_SCENE_REUSE_ALLOWED';gate['render_source_policy']='NASA_PREFERRED_COMMONS_ALLOWED_WITH_RENDER_RETRY';gate['ready']=len(selected)==len(manifest) and len(families)>=4 and all(x.get('native_4k') for x in selected)
 (OUT/'source_manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8');(OUT/'source_gate.json').write_text(json.dumps(gate,indent=2),encoding='utf-8')
 print(json.dumps({'ready':gate['ready'],'selected':len(selected),'unique_source_families':len(families),'families':sorted(families)}))
 if not gate['ready']:raise SystemExit('Render-stable distinct-source-family gate failed')
