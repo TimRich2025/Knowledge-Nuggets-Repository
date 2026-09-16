@@ -17,35 +17,29 @@ def run(cmd,timeout=65):
  try:
   p=subprocess.run(cmd,text=True,capture_output=True,timeout=timeout)
   return p.stdout if p.returncode==0 else None
- except (subprocess.TimeoutExpired,OSError):
-  return None
+ except (subprocess.TimeoutExpired,OSError): return None
 
 def clean(s):return re.sub(r"\s+"," ",re.sub(r"<[^>]+>"," ",html.unescape(s or ""))).strip()
 def text_blob(title="",desc="",keywords=None):return clean(" ".join([title,desc or ""," ".join(keywords or [])])).lower()
-
 def semantic_score(scene,text):
  c=CONCEPTS.get(int(scene.get("scene") or 0),{})
  if not c or any(x in text for x in BAD):return 0
- footage_hits=sum(1 for x in c["footage_any"] if x in text); context_hits=sum(1 for x in c["context_any"] if x in text)
+ footage_hits=sum(1 for x in c["footage_any"] if x in text);context_hits=sum(1 for x in c["context_any"] if x in text)
  if footage_hits<1 or context_hits<1:return 0
  return min(100,72+min(18,(footage_hits-1)*6)+min(10,(context_hits-1)*3))
-
 def probe(url):
  o=run(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=width,height,codec_name","-show_entries","format=duration","-of","json",url],55)
  if not o:return None
  try:
   d=json.loads(o);s=(d.get("streams") or [{}])[0];return {"width":int(s.get("width") or 0),"height":int(s.get("height") or 0),"duration":float((d.get("format") or {}).get("duration") or 0),"codec":s.get("codec_name") or ""}
  except:return None
-
 def classify(w,h):
  if h>w:return (True,100,"CROP_FILL") if w>=2160 and h>=3840 else (False,0,None)
  return (True,100,"CROP_FILL") if w>=3840 and h>=2160 else (False,0,None)
-
 def crop_filter(cp):
  x="0" if cp=="LEFT" else "iw-ow" if cp=="RIGHT" else "(iw-ow)/2";return f"scale=360:640:force_original_aspect_ratio=increase,crop=360:640:{x}:(ih-oh)/2"
 def sample(url,dur,stem,layout,cp="CENTER"):
- p=OUT/f"{stem}_{cp.lower()}.jpg";t=max(.2,min((dur or 3)*.35,max(.2,(dur or 3)-.5)));vf=crop_filter(cp);run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{t:.3f}","-i",url,"-frames:v","1","-vf",vf,str(p)],45);return p if p.exists() else None
-
+ p=OUT/f"{stem}_{cp.lower()}.jpg";t=max(.2,min((dur or 3)*.35,max(.2,(dur or 3)-.5)));run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{t:.3f}","-i",url,"-frames:v","1","-vf",crop_filter(cp),str(p)],45);return p if p.exists() else None
 def frame_qc(path):
  if not path:return {"pass":False,"score":0,"reason":"extract_failed_or_timeout"}
  with Image.open(path) as im:
@@ -59,7 +53,6 @@ def best_comp(url,dur,stem,layout):
   q=frame_qc(sample(url,dur,stem,layout,cp))
   if q["pass"]:good.append((q["score"],cp,q))
  return (max(good,key=lambda x:x[0])[1],max(good,key=lambda x:x[0])[2]) if good else (None,{"pass":False,"score":0,"reason":"all_crops_failed"})
-
 def nasa_search(q):return requests.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video","page_size":50},timeout=30).json()["collection"].get("items",[])
 def nasa_assets(nid):return [x.get("href","") for x in requests.get("https://images-api.nasa.gov/asset/"+quote(nid,safe=""),timeout=30).json()["collection"].get("items",[])]
 def nasa_videos(urls):return sorted([u for u in urls if re.search(r"\.(mp4|mov|m4v)(?:$|\?)",u,re.I)],key=lambda u:5 if "~orig" in u.lower() else 4 if "~large" in u.lower() else 2,reverse=True)
@@ -67,7 +60,6 @@ def commons_search(q):
  p={"action":"query","generator":"search","gsrsearch":q,"gsrnamespace":6,"gsrlimit":50,"prop":"imageinfo","iiprop":"url|mime|size|extmetadata","format":"json","formatversion":2};return (requests.get("https://commons.wikimedia.org/w/api.php",params=p,headers={"User-Agent":"KnowledgeNuggetsBot/6.0"},timeout=35).json().get("query") or {}).get("pages",[])
 def commons_license(meta):
  lic=((meta.get("LicenseShortName") or {}).get("value") or "");txt=(lic+" "+((meta.get("UsageTerms") or {}).get("value") or "")).lower();return ("public domain" in txt or "cc0" in txt or "pd-usgov" in txt or "pd-nasa" in txt),lic or "Public domain"
-
 def make_candidate(scene,kind,title,desc,url,lic,identity,rank,index):
  sem=semantic_score(scene,text_blob(title,desc,[]))
  if sem<70:return None
@@ -78,7 +70,6 @@ def make_candidate(scene,kind,title,desc,url,lic,identity,rank,index):
  cp,fq=best_comp(url,pr["duration"],f"{kind}{scene['scene']}_{index}",layout)
  if not cp:return None
  return {"scene":scene["scene"],"spoken_phrase":scene.get("spoken_phrase",""),"source_type":kind,"asset_identity":identity,"title":title,"description_excerpt":clean(desc)[:300],"direct_download_url":url,"source":"NASA Image and Video Library" if kind=="NASA" else "Wikimedia Commons","license":lic,"rights_status":"PASS","media_type":"VIDEO","width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),"visual_quality_score":qs,"semantic_score":sem,"layout_mode":layout,"crop_preference":cp,"frame_qc":fq,"search_rank":rank,"native_4k":True,"status":"CANDIDATE"}
-
 def collect(scene,kind,limit=12):
  out=[];seen=set();queries=list(scene.get("search_queries") or [])+CONCEPTS[int(scene["scene"])]["queries"]
  for q in queries:
@@ -104,12 +95,11 @@ def collect(scene,kind,limit=12):
 
 pools=[]
 for scene in SCENES:
- candidates=collect(scene,"NASA",12)
- if len(candidates)<12:candidates+=collect(scene,"COMMONS",12-len(candidates))
+ nasa=collect(scene,"NASA",12)
+ candidates=nasa if nasa else collect(scene,"COMMONS",12)
  candidates=list({c["direct_download_url"]:c for c in candidates}.values())
- candidates.sort(key=lambda c:(-c["semantic_score"],0 if c["source_type"]=="NASA" else 1,-c["visual_quality_score"],c["search_rank"]))
+ candidates.sort(key=lambda c:(0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
  pools.append((scene,candidates))
-
 used_urls=set();used_ids=set();manifest=[]
 for scene,candidates in pools:
  selected=None
@@ -119,7 +109,6 @@ for scene,candidates in pools:
  if selected:selected["status"]="SELECTED";manifest.append(selected)
  else:manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
 selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and x.get("native_4k") for x in selected)
-gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_FIRST_TIMEOUT_RESILIENT"}
-(OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8")
-print(json.dumps(manifest))
+gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_ONLY_WHEN_AVAILABLE_COMMONS_LAST_RESORT"}
+(OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8");print(json.dumps(manifest))
 if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable native-4K topic footage; {unique} unique assets.")
