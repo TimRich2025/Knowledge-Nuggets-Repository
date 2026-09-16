@@ -6,7 +6,6 @@ from PIL import Image,ImageStat,ImageFilter
 SCENES=json.loads(os.environ["KN_SCENE_BRIEF"])
 OUT=Path("output"); OUT.mkdir(exist_ok=True)
 BAD=("live video","official stream","live stream","livestream","live event","news conference","press conference","countdown","webinar","presentation","broadcast","briefing","podcast","audio only","weather balloon","simulation","simulator","interview")
-# Match the REAL footage role, not every abstract fact in the narration. Motion graphics explain mechanisms/numbers.
 CONCEPTS={
 1:{"footage_any":["measure","measurement","medical","human research","human body","physiology","health","body","crew medical","astronaut"],"context_any":["astronaut","spaceflight","crew","iss","space station"],"queries":["astronaut body measurement NASA video","astronaut medical examination NASA video","astronaut human research ISS video","astronaut physiology research ISS video"]},
 2:{"footage_any":["microgravity","weightless","floating","zero gravity","zero-g","on station"],"context_any":["astronaut","crew","iss","space station"],"queries":["astronaut floating microgravity ISS video","astronaut weightless inside space station video","crew on station microgravity 4K"]},
@@ -23,8 +22,7 @@ def text_blob(title="",desc="",keywords=None):return clean(" ".join([title,desc 
 def semantic_score(scene,text):
  c=CONCEPTS.get(int(scene.get("scene") or 0),{})
  if not c or any(x in text for x in BAD):return 0
- footage_hits=sum(1 for x in c["footage_any"] if x in text)
- context_hits=sum(1 for x in c["context_any"] if x in text)
+ footage_hits=sum(1 for x in c["footage_any"] if x in text); context_hits=sum(1 for x in c["context_any"] if x in text)
  if footage_hits<1 or context_hits<1:return 0
  return min(100,72+min(18,(footage_hits-1)*6)+min(10,(context_hits-1)*3))
 
@@ -36,7 +34,6 @@ def probe(url):
  except:return None
 
 def classify(w,h):
- # STRICT native 4K gate. No 1080p fallback and no upscaling.
  if h>w:return (True,100,"CROP_FILL") if w>=2160 and h>=3840 else (False,0,None)
  return (True,100,"CROP_FILL") if w>=3840 and h>=2160 else (False,0,None)
 
@@ -101,11 +98,15 @@ def collect(scene,kind,limit=12):
    if len(out)>=limit:return out
  return out
 
+# NASA is the primary production source because its direct media endpoint is stable on GitHub runners.
+# Commons remains a fallback only when NASA cannot supply enough native-4K candidates for the scene.
 pools=[]
 for scene in SCENES:
- candidates=collect(scene,"COMMONS",12)
- if len(candidates)<12:candidates+=collect(scene,"NASA",12-len(candidates))
- candidates=list({c["direct_download_url"]:c for c in candidates}.values());candidates.sort(key=lambda c:(-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]));pools.append((scene,candidates))
+ candidates=collect(scene,"NASA",12)
+ if len(candidates)<12:candidates+=collect(scene,"COMMONS",12-len(candidates))
+ candidates=list({c["direct_download_url"]:c for c in candidates}.values())
+ candidates.sort(key=lambda c:(-c["semantic_score"],0 if c["source_type"]=="NASA" else 1,-c["visual_quality_score"],c["search_rank"]))
+ pools.append((scene,candidates))
 
 used_urls=set();used_ids=set();manifest=[]
 for scene,candidates in pools:
@@ -116,7 +117,7 @@ for scene,candidates in pools:
  if selected:selected["status"]="SELECTED";manifest.append(selected)
  else:manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
 selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and x.get("native_4k") for x in selected)
-gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"FOOTAGE_INTENT_PLUS_VISUAL_DIRECTOR_NO_GENERIC_SPACE_FOOTAGE"}
+gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_FIRST_FOOTAGE_INTENT_PLUS_VISUAL_DIRECTOR"}
 (OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8")
 print(json.dumps(manifest))
 if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable native-4K topic footage; {unique} unique assets.")
