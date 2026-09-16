@@ -1,3 +1,3 @@
 KN-ASTRONAUT-V4
-trigger=2026-09-16T13:34:00+02:00
-reason=nasa-first-render-v4
+trigger=2026-09-16T14:15:00+02:00
+reason=render-stable-nasa-fallback-v5
