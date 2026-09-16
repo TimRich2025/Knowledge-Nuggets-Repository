@@ -1,0 +1,45 @@
+import json, subprocess, urllib.request, shlex
+from pathlib import Path
+
+OUT=Path('output'); MEDIA=Path('media'); MEDIA.mkdir(exist_ok=True); OUT.mkdir(exist_ok=True)
+plan=json.loads((OUT/'fullscreen_plan.json').read_text(encoding='utf-8'))
+clips=[]
+
+def run(cmd):
+    print('+', ' '.join(shlex.quote(str(x)) for x in cmd)); subprocess.run([str(x) for x in cmd],check=True)
+
+def dl(url,path):
+    req=urllib.request.Request(url,headers={'User-Agent':'KnowledgeNuggets/1.0'})
+    with urllib.request.urlopen(req,timeout=90) as r, open(path,'wb') as f:
+        while True:
+            b=r.read(1024*1024)
+            if not b: break
+            f.write(b)
+
+for i,b in enumerate(plan['beats'],1):
+    src=b.get('source') or {}; url=src.get('direct_download_url')
+    if not url: raise SystemExit(f'Beat {i}: no source URL')
+    raw=MEDIA/f'source_{i}.mp4'
+    if not raw.exists(): dl(url,raw)
+    dur=float(b['duration']); source_dur=float(src.get('duration') or dur)
+    # Deterministic staggered seek avoids repeatedly showing the opening frame.
+    start=max(0.0,min(source_dur-dur-1.0, source_dur*(0.12+0.11*(i-1))))
+    cap=' / '.join(b['caption_beats']).replace("'","’").replace(':','\\:')
+    out=MEDIA/f'beat_{i}.mp4'
+    vf=("scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,"
+        "eq=contrast=1.04:saturation=1.04,"
+        f"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='{cap}':"
+        "fontcolor=white:fontsize=66:borderw=6:bordercolor=black@0.85:"
+        "x=(w-text_w)/2:y=h*0.68")
+    run(['ffmpeg','-y','-ss',f'{start:.2f}','-i',raw,'-t',f'{dur:.2f}','-an','-vf',vf,'-r','30','-c:v','libx264','-preset','veryfast','-crf','19','-pix_fmt','yuv420p',out])
+    clips.append(out)
+
+concat=MEDIA/'concat.txt'; concat.write_text(''.join(f"file '{p.resolve()}'\n" for p in clips),encoding='utf-8')
+base=OUT/'KN-ASTRONAUT-V4_FULLSCREEN_SILENT.mp4'
+run(['ffmpeg','-y','-f','concat','-safe','0','-i',concat,'-c','copy',base])
+# Add a temporary original music/SFX bed so audio mixing is testable before ElevenLabs voice is connected.
+total=sum(float(b['duration']) for b in plan['beats'])
+final=OUT/'KN-ASTRONAUT-V4_FULLSCREEN_PREVIEW.mp4'
+run(['ffmpeg','-y','-i',base,'-f','lavfi','-i',f'sine=frequency=110:sample_rate=48000:duration={total}', '-filter_complex','[1:a]volume=0.018,highpass=f=70,lowpass=f=420[a]','-map','0:v','-map','[a]','-c:v','copy','-c:a','aac','-b:a','160k','-shortest',final])
+print(json.dumps({'rendered':True,'preview':str(final),'beats':len(clips),'duration':total}))
