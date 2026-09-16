@@ -101,14 +101,22 @@ for scene in SCENES:
  candidates=list({c["direct_download_url"]:c for c in candidates}.values())
  candidates.sort(key=lambda c:(0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
  pools.append((scene,candidates))
+
+# Prefer a different asset for every scene, but the production rule is >=4 genuinely
+# different assets across 5 scenes, not 5/5. If a scene has no unused qualified
+# candidate, allow one semantically-qualified reuse rather than falsely failing the gate.
 used_urls=set();used_ids=set();manifest=[]
 for scene,candidates in pools:
  selected=None
  for c in candidates:
   if c["direct_download_url"] not in used_urls and c["asset_identity"] not in used_ids:
-   selected=dict(c);used_urls.add(c["direct_download_url"]);used_ids.add(c["asset_identity"]);break
- if selected:selected["status"]="SELECTED";manifest.append(selected)
- else:manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
+   selected=dict(c);break
+ if selected is None and candidates:
+  selected=dict(candidates[0]);selected["source_reused_for_scene"]=True
+ if selected:
+  used_urls.add(selected["direct_download_url"]);used_ids.add(selected["asset_identity"]);selected["status"]="SELECTED";manifest.append(selected)
+ else:
+  manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
 selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and x.get("native_4k") for x in selected)
 gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_PREFERRED_COMMONS_FALLBACK_WHEN_POOL_THIN"}
 (OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8");print(json.dumps(manifest))
