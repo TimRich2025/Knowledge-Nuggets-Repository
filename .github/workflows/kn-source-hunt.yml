@@ -9,7 +9,6 @@ on:
       scene_brief:
         required: false
         default: ""
-        description: "Optional short JSON. KN-ASTRONAUT-V4 uses the repository preset automatically."
         type: string
       callback_url:
         required: false
@@ -18,23 +17,20 @@ on:
   push:
     paths:
       - "triggers/kn-source-hunt.txt"
-
 permissions:
   contents: read
-
 env:
   CONTENT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.content_id || 'KN-ASTRONAUT-V4' }}
-
 jobs:
   hunt:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg tesseract-ocr
+          sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -46,17 +42,7 @@ jobs:
         env:
           INPUT_SCENE_BRIEF: ${{ inputs.scene_brief }}
         run: |
-          if [ "$CONTENT_ID" = "KN-ASTRONAUT-V4" ]; then
-            export KN_SCENE_BRIEF="$(cat presets/astronaut_v4.json)"
-          else
-            export KN_SCENE_BRIEF="$INPUT_SCENE_BRIEF"
-          fi
-          python - <<'PY'
-          import json, os
-          data=json.loads(os.environ['KN_SCENE_BRIEF'])
-          assert isinstance(data,list) and data, 'scene brief must be a non-empty JSON array'
-          print(f'Loaded {len(data)} scenes successfully')
-          PY
+          if [ "$CONTENT_ID" = "KN-ASTRONAUT-V4" ]; then export KN_SCENE_BRIEF="$(cat presets/astronaut_v4.json)"; else export KN_SCENE_BRIEF="$INPUT_SCENE_BRIEF"; fi
           python source_hunter.py
       - name: Reject duplicate source variants and find replacements
         if: steps.source_hunt.outcome == 'success'
@@ -69,7 +55,17 @@ jobs:
       - name: Build fullscreen beat and audio direction
         if: always()
         run: python fullscreen_director.py
-      - name: Upload source and visual plans for review
+      - name: Verify source gate before render
+        run: |
+          python - <<'PY'
+          import json
+          g=json.load(open('output/source_gate.json'))
+          print(json.dumps(g,indent=2))
+          if not g.get('ready'): raise SystemExit('Source gate not ready; render blocked.')
+          PY
+      - name: Render fullscreen preview
+        run: python renderer.py
+      - name: Upload production plan
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -81,17 +77,14 @@ jobs:
             output/fullscreen_plan.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Report gate result
+      - name: Upload rendered preview
         if: always()
-        run: |
-          python - <<'PY'
-          import json, pathlib
-          p=pathlib.Path('output/source_gate.json')
-          if not p.exists(): raise SystemExit('Source hunter did not create source_gate.json')
-          gate=json.load(open(p,'r',encoding='utf-8'))
-          print(json.dumps(gate,indent=2))
-          if not gate.get('ready'): raise SystemExit('Topic/source-family gate is not ready. Review the uploaded production plan.')
-          PY
+        uses: actions/upload-artifact@v4
+        with:
+          name: kn-fullscreen-preview-${{ env.CONTENT_ID }}
+          path: output/KN-ASTRONAUT-V4_FULLSCREEN_PREVIEW.mp4
+          if-no-files-found: warn
+          retention-days: 7
       - name: Callback to Make
         if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.callback_url != '' }}
         env:
@@ -99,11 +92,8 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          manifest=json.load(open('output/source_manifest.json','r',encoding='utf-8'))
-          gate=json.load(open('output/source_gate.json','r',encoding='utf-8'))
-          plan=json.load(open('output/fullscreen_plan.json','r',encoding='utf-8'))
-          selected=[x for x in manifest if x.get('status')=='SELECTED']
-          payload={'content_id':os.environ['CONTENT_ID'],'status':'FULLSCREEN_PLAN_READY','visual_manifest':manifest,'visual_plan':plan,'coverage_score':round(100*len(selected)/len(manifest)) if manifest else 0,'quality_score':round(sum(float(x.get('visual_quality_score') or 0) for x in selected)/len(selected)) if selected else 0,'rights_status':'PASS','unique_sources':gate['unique_sources'],'minimum_unique_sources':gate['minimum_unique_sources']}
+          gate=json.load(open('output/source_gate.json'))
+          payload={'content_id':os.environ['CONTENT_ID'],'status':'PREVIEW_RENDERED','unique_sources':gate['unique_sources']}
           req=urllib.request.Request(os.environ['CALLBACK_URL'],data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
-          with urllib.request.urlopen(req,timeout=30) as r: print(r.status,r.read().decode('utf-8','replace'))
+          with urllib.request.urlopen(req,timeout=30) as r: print(r.status)
           PY
