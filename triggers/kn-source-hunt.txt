@@ -1,2 +1,2 @@
 KN-ASTRONAUT-V4
-build=v8
+build=v9-nasa-safe
