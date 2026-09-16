@@ -14,7 +14,11 @@ CONCEPTS={
 5:{"footage_any":["landing","landed","return to earth","postflight","post-flight","recovery","splashdown","rehabilitation"],"context_any":["astronaut","crew","spaceflight","nasa"],"queries":["astronaut postflight recovery after landing video","astronaut return Earth recovery NASA video","crew splashdown recovery astronaut 4K video"]}}
 
 def run(cmd,timeout=65):
- p=subprocess.run(cmd,text=True,capture_output=True,timeout=timeout); return p.stdout if p.returncode==0 else None
+ try:
+  p=subprocess.run(cmd,text=True,capture_output=True,timeout=timeout)
+  return p.stdout if p.returncode==0 else None
+ except (subprocess.TimeoutExpired,OSError):
+  return None
 
 def clean(s):return re.sub(r"\s+"," ",re.sub(r"<[^>]+>"," ",html.unescape(s or ""))).strip()
 def text_blob(title="",desc="",keywords=None):return clean(" ".join([title,desc or ""," ".join(keywords or [])])).lower()
@@ -40,10 +44,10 @@ def classify(w,h):
 def crop_filter(cp):
  x="0" if cp=="LEFT" else "iw-ow" if cp=="RIGHT" else "(iw-ow)/2";return f"scale=360:640:force_original_aspect_ratio=increase,crop=360:640:{x}:(ih-oh)/2"
 def sample(url,dur,stem,layout,cp="CENTER"):
- p=OUT/f"{stem}_{cp.lower()}.jpg";t=max(.2,min((dur or 3)*.35,max(.2,(dur or 3)-.5)));vf=crop_filter(cp);run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{t:.3f}","-i",url,"-frames:v","1","-vf",vf,str(p)],75);return p if p.exists() else None
+ p=OUT/f"{stem}_{cp.lower()}.jpg";t=max(.2,min((dur or 3)*.35,max(.2,(dur or 3)-.5)));vf=crop_filter(cp);run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{t:.3f}","-i",url,"-frames:v","1","-vf",vf,str(p)],45);return p if p.exists() else None
 
 def frame_qc(path):
- if not path:return {"pass":False,"score":0,"reason":"extract_failed"}
+ if not path:return {"pass":False,"score":0,"reason":"extract_failed_or_timeout"}
  with Image.open(path) as im:
   g=im.convert("L");st=ImageStat.Stat(g);edge=ImageStat.Stat(g.filter(ImageFilter.FIND_EDGES)).mean[0];ent=g.entropy();std=st.stddev[0];mean=st.mean[0]
  try:txt=re.sub(r"\s+"," ",subprocess.run(["tesseract",str(path),"stdout","--psm","11"],text=True,capture_output=True,timeout=20).stdout).strip()
@@ -98,8 +102,6 @@ def collect(scene,kind,limit=12):
    if len(out)>=limit:return out
  return out
 
-# NASA is the primary production source because its direct media endpoint is stable on GitHub runners.
-# Commons remains a fallback only when NASA cannot supply enough native-4K candidates for the scene.
 pools=[]
 for scene in SCENES:
  candidates=collect(scene,"NASA",12)
@@ -117,7 +119,7 @@ for scene,candidates in pools:
  if selected:selected["status"]="SELECTED";manifest.append(selected)
  else:manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
 selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and x.get("native_4k") for x in selected)
-gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_FIRST_FOOTAGE_INTENT_PLUS_VISUAL_DIRECTOR"}
+gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_FIRST_TIMEOUT_RESILIENT"}
 (OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8")
 print(json.dumps(manifest))
 if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable native-4K topic footage; {unique} unique assets.")
