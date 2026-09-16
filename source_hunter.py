@@ -10,7 +10,7 @@ CONCEPTS={
 1:{"footage_any":["measure","measurement","medical","human research","human body","physiology","health","body","crew medical","astronaut"],"context_any":["astronaut","spaceflight","crew","iss","space station"],"queries":["astronaut body measurement NASA video","astronaut medical examination NASA video","astronaut human research ISS video","astronaut physiology research ISS video"]},
 2:{"footage_any":["microgravity","weightless","floating","zero gravity","zero-g","on station"],"context_any":["astronaut","crew","iss","space station"],"queries":["astronaut floating microgravity ISS video","astronaut weightless inside space station video","crew on station microgravity 4K"]},
 3:{"footage_any":["ultrasound","medical","human research","human body","physiology","health","science experiment","research"],"context_any":["astronaut","crew","iss","space station","spaceflight"],"queries":["astronaut ultrasound ISS video","astronaut human research physiology ISS video","astronaut medical research ISS video","human research space station astronaut video"]},
-4:{"footage_any":["astronaut","crew","microgravity","floating","space station","iss","aboard","mission","living","working","research","science","full body","human research","physiology","health"],"context_any":["astronaut","crew","iss","space station","spaceflight","nasa"],"queries":["NASA astronaut ISS 4K video","astronaut floating ISS 4K video","astronaut working aboard space station 4K video","astronaut crew space station 4K video","astronaut science research space station 4K video","astronaut living working aboard ISS 4K video"]},
+4:{"footage_any":["astronaut","crew","microgravity","floating","space station","iss","aboard","mission","living","working","research","science","full body","human research","physiology","health","ultra hd","8k"],"context_any":["astronaut","crew","iss","space station","spaceflight","nasa"],"queries":["First 8K Video from Space astronauts","8K astronauts living working space station","NASA astronauts living working aboard ISS","NASA astronaut ISS 4K video","astronaut floating ISS 4K video","astronaut working aboard space station 4K video","astronaut crew space station 4K video","astronaut science research space station 4K video","astronaut living working aboard ISS 4K video"]},
 5:{"footage_any":["landing","landed","return to earth","postflight","post-flight","recovery","splashdown","rehabilitation"],"context_any":["astronaut","crew","spaceflight","nasa"],"queries":["astronaut postflight recovery after landing video","astronaut return Earth recovery NASA video","crew splashdown recovery astronaut 4K video"]}}
 
 def run(cmd,timeout=65):
@@ -96,7 +96,8 @@ def collect(scene,kind,limit=12):
 pools=[]
 for scene in SCENES:
  nasa=collect(scene,"NASA",12)
- candidates=nasa if nasa else collect(scene,"COMMONS",12)
+ commons=collect(scene,"COMMONS",12) if len(nasa)<4 else []
+ candidates=nasa+commons
  candidates=list({c["direct_download_url"]:c for c in candidates}.values())
  candidates.sort(key=lambda c:(0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
  pools.append((scene,candidates))
@@ -109,6 +110,6 @@ for scene,candidates in pools:
  if selected:selected["status"]="SELECTED";manifest.append(selected)
  else:manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
 selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and x.get("native_4k") for x in selected)
-gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_ONLY_WHEN_AVAILABLE_COMMONS_LAST_RESORT"}
+gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_PREFERRED_COMMONS_FALLBACK_WHEN_POOL_THIN"}
 (OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8");print(json.dumps(manifest))
 if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable native-4K topic footage; {unique} unique assets.")
