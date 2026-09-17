@@ -27,6 +27,18 @@ def semantic_score(scene,text):
  footage_hits=sum(1 for x in c["footage_any"] if x in text);context_hits=sum(1 for x in c["context_any"] if x in text)
  if footage_hits<1 or context_hits<1:return 0
  return min(100,72+min(18,(footage_hits-1)*6)+min(10,(context_hits-1)*3))
+
+def title_gate(scene,title):
+ """Reject generic station-tour/equipment assets for beats that require a visible human/body context."""
+ n=int(scene.get("scene") or 0); t=clean(title).lower()
+ generic=("tour","step inside","earth observations","views of earth","station tour")
+ if n in (1,3,4) and any(x in t for x in generic): return False
+ if n==1:return any(x in t for x in ("astronaut","crew","human","medical","body","physiology","health","measurement"))
+ if n==3:return any(x in t for x in ("astronaut","crew","human","medical","ultrasound","research","science","physiology","health"))
+ if n==4:return any(x in t for x in ("astronaut","crew","human","8k","living","working","research","science"))
+ if n==5:return any(x in t for x in ("crew","astronaut","splashdown","landing","recovery","return"))
+ return True
+
 def probe(url):
  o=run(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=width,height,codec_name","-show_entries","format=duration","-of","json",url],55)
  if not o:return None
@@ -61,6 +73,7 @@ def commons_search(q):
 def commons_license(meta):
  lic=((meta.get("LicenseShortName") or {}).get("value") or "");txt=(lic+" "+((meta.get("UsageTerms") or {}).get("value") or "")).lower();return ("public domain" in txt or "cc0" in txt or "pd-usgov" in txt or "pd-nasa" in txt),lic or "Public domain"
 def make_candidate(scene,kind,title,desc,url,lic,identity,rank,index):
+ if not title_gate(scene,title):return None
  sem=semantic_score(scene,text_blob(title,desc,[]))
  if sem<70:return None
  pr=probe(url)
@@ -78,7 +91,7 @@ def collect(scene,kind,limit=12):
   for rank,it in enumerate(items[:40],1):
    if kind=="NASA":
     d=(it.get("data") or [{}])[0];identity=d.get("nasa_id");title=d.get("title") or "";desc=d.get("description") or "";kws=d.get("keywords") or [];semtext=text_blob(title,desc,kws)
-    if not identity or identity in seen or semantic_score(scene,semtext)<70:continue
+    if not identity or identity in seen or semantic_score(scene,semtext)<70 or not title_gate(scene,title):continue
     seen.add(identity)
     try:urls=nasa_videos(nasa_assets(identity))
     except:continue
@@ -87,7 +100,7 @@ def collect(scene,kind,limit=12):
      if c:out.append(c);break
    else:
     title=it.get("title") or "";identity=title;ii=((it.get("imageinfo") or [{}])[0]);meta=ii.get("extmetadata") or {};desc=clean(((meta.get("ImageDescription") or {}).get("value") or ""));url=ii.get("url") or "";mime=(ii.get("mime") or "").lower();oklic,lic=commons_license(meta)
-    if identity in seen or semantic_score(scene,text_blob(title,desc,[]))<70 or not oklic or not mime.startswith("video/") or not re.search(r"\.(webm|mp4)(?:$|\?)",url,re.I):continue
+    if identity in seen or semantic_score(scene,text_blob(title,desc,[]))<70 or not title_gate(scene,title) or not oklic or not mime.startswith("video/") or not re.search(r"\.(webm|mp4)(?:$|\?)",url,re.I):continue
     seen.add(identity);c=make_candidate(scene,"COMMONS",title.replace("File:","",1),desc,url,lic,identity,rank,len(out))
     if c:out.append(c)
    if len(out)>=limit:return out
@@ -101,10 +114,6 @@ for scene in SCENES:
  candidates=list({c["direct_download_url"]:c for c in candidates}.values())
  candidates.sort(key=lambda c:(0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
  pools.append((scene,candidates))
-
-# Prefer a different asset for every scene, but the production rule is >=4 genuinely
-# different assets across 5 scenes, not 5/5. If a scene has no unused qualified
-# candidate, allow one semantically-qualified reuse rather than falsely failing the gate.
 used_urls=set();used_ids=set();manifest=[]
 for scene,candidates in pools:
  selected=None
@@ -118,6 +127,6 @@ for scene,candidates in pools:
  else:
   manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
 selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and x.get("native_4k") for x in selected)
-gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_PREFERRED_COMMONS_FALLBACK_WHEN_POOL_THIN"}
+gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_PREFERRED_STRICT_HUMAN_BODY_TITLE_GATE"}
 (OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8");print(json.dumps(manifest))
 if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable native-4K topic footage; {unique} unique assets.")
