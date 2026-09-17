@@ -49,7 +49,6 @@ def caption_filters(cards,dur,scene):
         size=82 if len(card)<=12 else 68
         col=ORANGE if ('3%' in card or card in ('GRAVITY','PRESSURE','STRETCHES','TALLER')) else 'white'
         fs.append(f"drawtext=fontfile={FONT}:text='{esc(card)}':fontcolor={col}:fontsize={size}:borderw=7:bordercolor=black@0.82:x=(w-text_w)/2:y=h*0.70:enable='between(t,{a:.2f},{z:.2f})'")
-    # drawbox does not reliably accept h/w aliases in all geometry fields; use iw/ih.
     if scene in (2,3):
         fs += ["drawbox=x=iw*0.47:y=ih*0.30:w=10:h=ih*0.25:color=0xFF7A18@0.85:t=fill",
                "drawbox=x=iw*0.40:y=ih*0.40:w=iw*0.20:h=8:color=white@0.75:t=fill"]
@@ -76,11 +75,12 @@ for i,b in enumerate(plan['beats'],1):
 concat=MEDIA/'concat.txt'; concat.write_text(''.join(f"file '{p.resolve()}'\n" for p in clips),encoding='utf-8')
 base=OUT/'KN-ASTRONAUT-V4_FULLSCREEN_SILENT.mp4'; run(['ffmpeg','-y','-f','concat','-safe','0','-i',concat,'-c','copy',base])
 total=sum(float(b['duration']) for b in plan['beats']); final=OUT/'KN-ASTRONAUT-V4_FULLSCREEN_PREVIEW.mp4'
-script=' '.join(str(b.get('narration','')) for b in plan['beats']).strip()
+# fullscreen_director stores narration in `voice`; accept `narration` for forward compatibility.
+script=' '.join(str(b.get('voice') or b.get('narration') or '') for b in plan['beats']).strip()
 voice=MEDIA/'temp_voice.wav'
 if script:
     run(['espeak-ng','-v','en-us','-s','158','-p','42','-w',voice,script])
     run(['ffmpeg','-y','-i',base,'-i',voice,'-f','lavfi','-i',f'sine=frequency=90:sample_rate=48000:duration={total}', '-filter_complex','[1:a]volume=1.25,highpass=f=80,lowpass=f=9000[v];[2:a]volume=0.010,lowpass=f=300[bed];[v][bed]amix=inputs=2:duration=longest:normalize=0[a]','-map','0:v','-map','[a]','-c:v','copy','-c:a','aac','-b:a','192k','-shortest',final])
 else:
-    run(['ffmpeg','-y','-i',base,'-c','copy',final])
+    raise RuntimeError('Fullscreen plan contains no narration/voice text; refusing silent preview')
 print(json.dumps({'rendered':True,'preview':str(final),'beats':len(clips),'duration':total,'temp_voice':bool(script)}))
