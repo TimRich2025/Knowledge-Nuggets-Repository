@@ -26,7 +26,7 @@ vf=(
     f"[0:v]pad={CANVAS_W}:{CANVAS_H}:0:{VIDEO_Y}:color=black[base];"
     f"[base][1:v]overlay=0:0[locked];"
     f"[locked]drawtext=fontfile={QUESTION_FONT}:text='PREFLIGHT':fontcolor=white:fontsize=68:"
-    f"borderw=6:bordercolor=black@0.95:x=(w-text_w)/2:y={VIDEO_Y}+(VIDEO_H-text_h)/2[v]"
+    f"borderw=6:bordercolor=black@0.95:x=(w-text_w)/2:y={VIDEO_Y}+({VIDEO_H}-text_h)/2[v]"
 )
 subprocess.run([
     "ffmpeg","-hide_banner","-loglevel","error","-y",
