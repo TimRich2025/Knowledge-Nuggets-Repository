@@ -49,7 +49,17 @@ jobs:
             sleep $((attempt * 5))
           done
       - name: Static preflight
-        run: python -m py_compile source_hunter.py source_dedupe.py visual_director.py fullscreen_director.py renderer.py layout_lock.py layout_qc.py
+        run: |
+          python -m py_compile source_hunter.py source_dedupe.py visual_director.py fullscreen_director.py renderer.py layout_lock.py layout_qc.py
+          python - <<'PY'
+          from pathlib import Path
+          import layout_lock
+          assert Path(layout_lock.LOGO_PATH).is_file(), "Official logo asset missing"
+          assert Path(layout_lock.BRAND_FONT).is_file(), "Brand font missing"
+          assert Path(layout_lock.QUESTION_FONT).is_file(), "Question/subtitle font missing"
+          layout_lock.build_header(["WHY DO ASTRONAUTS","GROW TALLER?"],"output/preflight_header.png")
+          print("Renderer assets OK:", layout_lock.BRAND_FONT, layout_lock.QUESTION_FONT)
+          PY
       - name: Find and QC topic-matched motion clips
         id: source_hunt
         continue-on-error: true
