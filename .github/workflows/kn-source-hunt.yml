@@ -29,13 +29,27 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core fonts-noto-core espeak-ng
+          set -e
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core fonts-noto-core espeak-ng; then
+              break
+            fi
+            if [ "$attempt" = "3" ]; then exit 1; fi
+            sleep $((attempt * 8))
+          done
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install requests==2.32.5 Pillow==11.3.0
+      - name: Install Python dependencies
+        run: |
+          for attempt in 1 2 3; do
+            pip install requests==2.32.5 Pillow==11.3.0 && break
+            if [ "$attempt" = "3" ]; then exit 1; fi
+            sleep $((attempt * 5))
+          done
+      - name: Static preflight
+        run: python -m py_compile source_hunter.py source_dedupe.py visual_director.py fullscreen_director.py renderer.py layout_lock.py layout_qc.py
       - name: Find and QC topic-matched motion clips
         id: source_hunt
         continue-on-error: true
@@ -43,7 +57,13 @@ jobs:
           INPUT_SCENE_BRIEF: ${{ inputs.scene_brief }}
         run: |
           if [ "$CONTENT_ID" = "KN-ASTRONAUT-V4" ]; then export KN_SCENE_BRIEF="$(cat presets/astronaut_v4.json)"; else export KN_SCENE_BRIEF="$INPUT_SCENE_BRIEF"; fi
-          python source_hunter.py
+          for attempt in 1 2; do
+            python source_hunter.py && break
+            code=$?
+            if [ "$attempt" = "2" ]; then exit "$code"; fi
+            echo "Source discovery attempt $attempt failed; retrying after backoff..."
+            sleep 8
+          done
       - name: Reject duplicate source variants and find replacements
         if: steps.source_hunt.outcome == 'success'
         id: dedupe
