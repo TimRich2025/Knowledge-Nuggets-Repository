@@ -22,7 +22,7 @@ class IngestError(RuntimeError): pass
 
 def prune_cache() -> None:
     limit=max(0.05,float(MAX_CACHE_GB))*1024**3
-    files=[p for p in CACHE.iterdir() if p.is_file() and p.suffix not in {".json",".part"}]
+    files=[p for p in CACHE.iterdir() if p.is_file() and p.suffix != ".json"]
     total=sum(p.stat().st_size for p in files)
     if total <= limit:
         return
@@ -116,7 +116,7 @@ def ingest_video_segment(urls: list[str], anchor: float, portrait: bool = False)
         try:
             prune_cache()
             if not dest.exists():
-                tmp=dest.with_suffix(".mp4.part"); tmp.unlink(missing_ok=True)
+                tmp=dest.with_name(dest.stem+".part.mp4"); tmp.unlink(missing_ok=True)
                 scale="1080:-2" if portrait else "-2:1080"
                 cmd=["ffmpeg","-hide_banner","-loglevel","error","-y",
                      "-user_agent","KnowledgeNuggetsSourceIngest/2.0",
@@ -141,6 +141,8 @@ def ingest_video_segment(urls: list[str], anchor: float, portrait: bool = False)
         except Exception as e:
             errors.append(f"{url}: {e}")
             dest.unlink(missing_ok=True); meta_path.unlink(missing_ok=True)
+            try: tmp.unlink(missing_ok=True)
+            except Exception: pass
             time.sleep(1)
     raise IngestError("all approved sources failed segment ingest: "+" | ".join(errors))
 
