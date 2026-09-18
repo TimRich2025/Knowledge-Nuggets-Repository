@@ -6,6 +6,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from PIL import Image, ImageChops, ImageStat
 from layout_lock import build_header, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H, HEADER_H
 
@@ -23,6 +25,11 @@ HEADER_PATH = OUT / "kn_locked_header.png"
 ASS_PATH = OUT / "subtitles.ass"
 QC_PATH = OUT / "qc.json"
 
+SESSION=requests.Session()
+SESSION.headers.update({"User-Agent":"KnowledgeNuggetsRenderer/7.0"})
+SESSION.mount("https://",HTTPAdapter(max_retries=Retry(total=4,connect=4,read=4,status=4,backoff_factor=1.2,status_forcelist=[429,500,502,503,504],allowed_methods=frozenset(["GET"]))))
+SESSION.mount("http://",HTTPAdapter(max_retries=Retry(total=4,connect=4,read=4,status=4,backoff_factor=1.2,status_forcelist=[429,500,502,503,504],allowed_methods=frozenset(["GET"]))))
+
 def run(cmd, timeout=480):
     print("RUN:", " ".join(map(str, cmd)))
     subprocess.run(cmd, check=True, timeout=timeout)
@@ -33,7 +40,7 @@ def ffprobe_duration(path):
 
 def download(url,dest,timeout=(20,240)):
     if not url: raise RuntimeError(f"Missing URL for {dest}")
-    with requests.get(url,headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"},stream=True,timeout=timeout,allow_redirects=True) as r:
+    with SESSION.get(url,headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"},stream=True,timeout=timeout,allow_redirects=True) as r:
         r.raise_for_status()
         with dest.open("wb") as f:
             for chunk in r.iter_content(chunk_size=1024*1024):
@@ -56,10 +63,10 @@ def resolve_nasa_candidates(url):
     asset_id=nasa_asset_id(url)
     headers={"User-Agent":"KnowledgeNuggetsRenderer/1.0"}
     api=f"https://images-api.nasa.gov/asset/{asset_id}"
-    r=requests.get(api,headers=headers,timeout=(15,30))
+    r=SESSION.get(api,headers=headers,timeout=(15,30))
     if r.status_code==404:
         q=asset_id.split("_",1)[0] if asset_id.startswith("jsc") else asset_id
-        sr=requests.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video"},headers=headers,timeout=(15,30))
+        sr=SESSION.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video"},headers=headers,timeout=(15,30))
         sr.raise_for_status()
         hits=sr.json().get("collection",{}).get("items",[])
         nasa_ids=[]
@@ -74,7 +81,7 @@ def resolve_nasa_candidates(url):
             asset_id=nasa_ids[0]
         else:
             raise RuntimeError(f"NASA asset search returned no result for {q}")
-        r=requests.get(f"https://images-api.nasa.gov/asset/{asset_id}",headers=headers,timeout=(15,30))
+        r=SESSION.get(f"https://images-api.nasa.gov/asset/{asset_id}",headers=headers,timeout=(15,30))
     r.raise_for_status()
     items=r.json().get("collection",{}).get("items",[])
     hrefs=[str(x.get("href","")).replace("http://","https://") for x in items if x.get("href")]
