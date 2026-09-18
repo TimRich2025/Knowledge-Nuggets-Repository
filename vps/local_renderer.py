@@ -96,9 +96,9 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(s)
         if ";" in vf:
             fc=f"[0:v]{vf}[v]"
-            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-filter_complex",fc,"-map","[v]","-c:v","libx264","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
+            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
         else:
-            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-vf",vf,"-c:v","libx264","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
+            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-filter_threads","1","-vf",vf,"-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
         run(cmd, 300); segments.append(seg)
 
     concat=job_dir/"concat.txt"
@@ -109,7 +109,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     fc=(f"[0:v]crop={CANVAS_W}:{VIDEO_H}:0:0[lower];[lower]pad={CANVAS_W}:{CANVAS_H}:0:{VIDEO_Y}:color=black[base];"
         f"[base][1:v]overlay=0:0:eof_action=repeat:repeatlast=1[locked];[locked]ass={ass.as_posix()}[v]")
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(lower),"-loop","1","-i",str(header),"-i",str(audio),
-         "-filter_complex",fc,"-map","[v]","-map","2:a:0","-t",f"{audio_dur:.3f}","-c:v","libx264","-preset","veryfast","-crf","16",
+         "-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-map","2:a:0","-t",f"{audio_dur:.3f}","-c:v","libx264","-threads","2","-preset","veryfast","-crf","16",
          "-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)],360)
 
     frame=job_dir/"qc_frame.png"
