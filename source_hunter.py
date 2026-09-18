@@ -156,7 +156,10 @@ def known_fallback(scene):
    "asset_identity":"File:SRF Wissen - Wie entsteht ein Bandscheibenvorfall?.webm",
    "title":"SRF Wissen - Wie entsteht ein Bandscheibenvorfall?",
    "url":"https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d3/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm.1080p.vp9.webm?download=",
-   "backup":[],
+   "backup":[
+    "https://images-assets.nasa.gov/video/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209~orig.mp4",
+    "https://images-assets.nasa.gov/video/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209~large.mp4"
+   ],
    "license":"CC BY-SA 4.0","rights_status":"PASS_ATTRIBUTION_REQUIRED","semantic":96,"crop":"CENTER",
    "attribution":"Distribution Wissen SRF — CC BY-SA 4.0 — Wikimedia Commons"
   },
