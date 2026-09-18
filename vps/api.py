@@ -5,7 +5,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from redis import Redis
-from .config import API_TOKEN, REDIS_URL, OUTPUTS
+from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
 
@@ -37,7 +37,9 @@ def health():
 
 @app.post("/jobs",status_code=202)
 def submit(job: Job, authorization: str | None = Header(default=None)):
-    auth(authorization)
+    make_callback_ok = bool(ALLOWED_CALLBACK_URL and job.callback_url == ALLOWED_CALLBACK_URL)
+    if not make_callback_ok:
+        auth(authorization)
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")
