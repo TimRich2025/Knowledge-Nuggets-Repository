@@ -15,24 +15,8 @@ DIVIDER=(205,205,202)
 BRAND=(155,157,160)
 LOGO_PATH=Path('assets/kn-watermark.png')
 BRAND_TEXT='KNOWLEDGE NUGGETS'
-def _font_path(*candidates):
-    for p in candidates:
-        if Path(p).is_file():
-            return p
-    raise RuntimeError("No approved renderer font is installed: "+", ".join(candidates))
-
-BRAND_FONT=_font_path(
-    '/usr/share/fonts/truetype/noto/NotoSansDisplay-Light.ttf',
-    '/usr/share/fonts/truetype/noto/NotoSans-Light.ttf',
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans-ExtraLight.ttf',
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-)
-QUESTION_FONT=_font_path(
-    '/usr/share/fonts/truetype/noto/NotoSansDisplay-ExtraCondensedBlack.ttf',
-    '/usr/share/fonts/truetype/noto/NotoSansDisplay-CondensedBlack.ttf',
-    '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
-    '/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf'
-)
+BRAND_FONT='/usr/share/fonts/truetype/noto/NotoSansDisplay-Light.ttf'
+QUESTION_FONT='/usr/share/fonts/truetype/noto/NotoSansDisplay-ExtraCondensedBlack.ttf'
 
 # Immutable coordinates scaled from the approved Knowledge Nuggets master layout.
 LOGO_H=56
