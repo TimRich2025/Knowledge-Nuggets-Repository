@@ -81,8 +81,16 @@ for i,b in enumerate(plan['beats'],1):
         if not raw.exists():
             raise RuntimeError(f'Beat {i}: all source encodes failed: {errors}')
     dur=float(b['duration']); source_dur=float(src.get('duration') or dur)
-    # Temporary fallback only. A later semantic shot-selector can supply source_start.
-    start=float(b['source_start']) if b.get('source_start') is not None else max(0.0,min(source_dur-dur-1.0,source_dur*(0.12+0.11*(i-1))))
+    # Seek around the exact frame time that passed source QC. Beat-specific offsets
+    # prevent repeated footage when one vetted source legitimately serves two beats.
+    if b.get('source_start') is not None:
+        start=float(b['source_start'])
+    elif src.get('validated_frame_time') is not None:
+        anchor=float(src['validated_frame_time'])
+        offset=float(b.get('source_start_offset') or 0)
+        start=max(0.0,min(max(0.0,source_dur-dur-.25),anchor-dur/2+offset))
+    else:
+        start=max(0.0,min(max(0.0,source_dur-dur-.25),source_dur*.35-dur/2))
     out=MEDIA/f'beat_{i}.mp4'
     captions=','.join(caption_filters(b['caption_beats'],dur))
     fc=(f"[0:v]scale=1080:{VIDEO_H}:force_original_aspect_ratio=increase,"
