@@ -1,10 +1,10 @@
 import json, subprocess, urllib.request, urllib.error, urllib.parse, shlex, time, hashlib
 from pathlib import Path
-from layout_lock import build_header, VIDEO_H, VIDEO_Y
+from layout_lock import build_header, VIDEO_H, VIDEO_Y, QUESTION_FONT
 
 OUT=Path('output'); MEDIA=Path('media'); MEDIA.mkdir(exist_ok=True); OUT.mkdir(exist_ok=True)
 plan=json.loads((OUT/'fullscreen_plan.json').read_text(encoding='utf-8')); clips=[]
-SUB_FONT='/usr/share/fonts/truetype/noto/NotoSansDisplay-CondensedBlack.ttf'
+SUB_FONT=QUESTION_FONT
 
 def run(cmd):
     print('+', ' '.join(shlex.quote(str(x)) for x in cmd), flush=True)
