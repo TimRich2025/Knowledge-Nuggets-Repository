@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, json, os, subprocess, time
+import base64, hashlib, json, os, subprocess, time
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
@@ -90,10 +90,31 @@ def ingest(urls: list[str], kind: str) -> dict:
             time.sleep(1)
     raise IngestError("all approved sources failed ingest: " + " | ".join(errors))
 
+
+def ingest_inline_audio(encoded: str) -> dict:
+    try:
+        raw=base64.b64decode(encoded,validate=True)
+    except Exception as e:
+        raise IngestError(f"invalid audio_base64: {e}")
+    if len(raw) < 32_000:
+        raise IngestError("inline narration is implausibly small")
+    key=hashlib.sha256(raw).hexdigest()
+    dest=CACHE/f"{key}.mp3"; meta_path=CACHE/f"{key}.json"
+    if not dest.exists():
+        tmp=dest.with_suffix(".mp3.part"); tmp.write_bytes(raw); os.replace(tmp,dest)
+    probe=ffprobe(dest); media=_audio_meta(probe)
+    meta={"key":key,"url":"inline://make-tts","kind":"audio","path":str(dest),"bytes":dest.stat().st_size,**media}
+    meta_path.write_text(json.dumps(meta,indent=2),encoding="utf-8"); os.utime(dest,None)
+    return meta
+
 def ingest_job(job: dict) -> dict:
-    audio_url = job.get("audio_url")
-    if not audio_url: raise IngestError("audio_url missing")
-    audio = ingest([audio_url], "audio")
+    prune_cache()
+    if job.get("audio_base64"):
+        audio=ingest_inline_audio(job["audio_base64"])
+    else:
+        audio_url=job.get("audio_url")
+        if not audio_url: raise IngestError("audio_url or audio_base64 missing")
+        audio=ingest([audio_url],"audio")
     scenes = []
     for s in job.get("scenes") or []:
         primary = s.get("source_url") or s.get("direct_download_url")
