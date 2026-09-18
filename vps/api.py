@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, re, time, uuid
+import hashlib, hmac, json, re, time, uuid
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -68,3 +68,15 @@ def preview(job_id: str, authorization: str | None = Header(default=None)):
     if root not in p.parents or not p.is_file():
         raise HTTPException(404,"preview artifact unavailable")
     return FileResponse(p,media_type="video/mp4",filename=f"{safe_id(job_id)}.mp4")
+
+
+@app.get("/preview/{content_id}")
+def public_preview(content_id: str, token: str):
+    cid=safe_id(content_id)
+    expected=hashlib.sha256(f"{API_TOKEN}:{cid}".encode()).hexdigest()
+    if not API_TOKEN or not hmac.compare_digest(token,expected):
+        raise HTTPException(401,"invalid preview token")
+    p=(OUTPUTS/cid/"preview.mp4").resolve(); root=OUTPUTS.resolve()
+    if root not in p.parents or not p.is_file():
+        raise HTTPException(404,"preview artifact unavailable")
+    return FileResponse(p,media_type="video/mp4",filename=f"{cid}.mp4")
