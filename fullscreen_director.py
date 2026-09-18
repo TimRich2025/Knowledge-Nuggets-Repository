@@ -16,7 +16,7 @@ beats=[
 
 for b in beats:
     src=selected.get(b['scene'])
-    b['source']=None if not src else {k:src.get(k) for k in ('asset_identity','title','direct_download_url','width','height','duration','source_family')}
+    b['source']=None if not src else {k:src.get(k) for k in ('asset_identity','title','direct_download_url','backup_download_urls','width','height','duration','source_family','license','rights_status','attribution')}
     b['render']={
       "canvas":"1080x1920","layout":"KN_LAYOUT_V1_LOCKED","header_height":429,
       "video_y":429,"video_height":1491,"source_mode":"moving_video_only",
