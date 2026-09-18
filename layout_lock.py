@@ -19,17 +19,17 @@ BRAND_FONT='/usr/share/fonts/truetype/noto/NotoSansDisplay-Light.ttf'
 QUESTION_FONT='/usr/share/fonts/truetype/noto/NotoSansDisplay-ExtraCondensedBlack.ttf'
 
 # Immutable coordinates scaled from the approved Knowledge Nuggets master layout.
-LOGO_H=56
-LOGO_Y=39
-BRAND_Y=111
+LOGO_H=68
+LOGO_Y=36
+BRAND_Y=113
 BRAND_SIZE=19
-BRAND_TRACKING=6
+BRAND_TRACKING=4.75
 ORANGE_LINE_Y=180
-ORANGE_LINE_W=130
-ORANGE_LINE_H=2
-QUESTION_LINE1_Y=222
-QUESTION_LINE2_Y=300
-QUESTION_SIZE=82
+ORANGE_LINE_W=145
+ORANGE_LINE_H=1
+QUESTION_LINE1_Y=198
+QUESTION_LINE2_Y=285
+QUESTION_SIZE=86
 QUESTION_MAX_W=880
 
 def _tracked_text(draw, xy, text, font, fill, tracking):
