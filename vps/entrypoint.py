@@ -3,7 +3,8 @@ import json, os, subprocess, sys, time
 from pathlib import Path
 from .config import ROOT
 
-MARKER = ROOT / "stress-50-passed.json"\nSOURCE_MARKER = ROOT / "source-ingest-smoke-passed.json"
+MARKER = ROOT / "stress-50-passed.json"
+SOURCE_MARKER = ROOT / "source-ingest-smoke-passed.json"
 
 def main():
     requested = int(os.environ.get("KN_STRESS_ONCE", "0") or 0)
