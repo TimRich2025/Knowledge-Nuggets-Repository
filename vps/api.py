@@ -43,6 +43,19 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")
+    for i,s in enumerate(job.scenes,1):
+        if s.get("semantic_match") != "EXACT":
+            raise HTTPException(422,f"scene {i}: semantic_match must be EXACT")
+        if s.get("temporal_match") != "VERIFIED":
+            raise HTTPException(422,f"scene {i}: temporal_match must be VERIFIED")
+        try:
+            ss=float(s["shot_start_seconds"]); se=float(s["shot_end_seconds"])
+        except Exception:
+            raise HTTPException(422,f"scene {i}: verified shot interval required")
+        if se-ss < 1.5:
+            raise HTTPException(422,f"scene {i}: verified shot interval must be at least 1.5s")
+        if float(s.get("semantic_score") or 0) < 94:
+            raise HTTPException(422,f"scene {i}: semantic score below exact-match gate")
     if not job.audio_url and not job.audio_base64: raise HTTPException(422,"audio_url or audio_base64 required")
     jid=f"{safe_id(job.content_id)}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     r=db(); payload=job.model_dump(); payload["_job_id"]=jid
