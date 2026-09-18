@@ -1,2 +1,2 @@
 KN-ASTRONAUT-V4
-build=rc2-qc-anchored-shot-selection
+build=rc3-rate-limit-failover
