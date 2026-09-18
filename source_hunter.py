@@ -134,35 +134,74 @@ def collect(scene,kind,limit=12):
 
 def known_fallback(scene):
  n=int(scene.get("scene") or 0)
- if n!=3:return None
- # Curated licensed anatomy fallback: moving 1080p explanation of intervertebral discs.
- # Used only when automatic NASA/Commons discovery finds no suitable mechanism shot.
- url="https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d3/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm.1080p.vp9.webm?download="
- pr=probe(url)
- if not pr or pr["duration"]<1 or not ((pr["width"]>=1920 and pr["height"]>=1080) or (pr["height"]>=1920 and pr["width"]>=1080)):
-  return None
- return {
-  "scene":3,"spoken_phrase":scene.get("spoken_phrase",""),"source_type":"COMMONS",
-  "asset_identity":"File:SRF Wissen - Wie entsteht ein Bandscheibenvorfall?.webm",
-  "title":"SRF Wissen - Wie entsteht ein Bandscheibenvorfall?",
-  "description_excerpt":"Moving anatomy explanation showing intervertebral discs between vertebrae.",
-  "direct_download_url":url,"source":"Wikimedia Commons",
-  "license":"CC BY-SA 4.0","rights_status":"PASS_ATTRIBUTION_REQUIRED","media_type":"VIDEO",
-  "width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),
-  "visual_quality_score":82,"semantic_score":96,"layout_mode":"CROP_FILL","crop_preference":"CENTER",
-  "frame_qc":{"pass":True,"score":82,"reason":"CURATED_LICENSED_ANATOMY_FALLBACK"},
-  "search_rank":999,"native_4k":False,"quality_tier":"FULL_HD_FALLBACK","status":"CANDIDATE",
-  "attribution":"Distribution Wissen SRF — CC BY-SA 4.0 — Wikimedia Commons"
+ curated={
+  1:{
+   "source_type":"NASA",
+   "asset_identity":"jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209",
+   "title":"What Human Health Data Is Being Collected from Artemis II Astronauts?",
+   "url":"https://images-assets.nasa.gov/video/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209~orig.mp4",
+   "backup":["https://images-assets.nasa.gov/video/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209/jsc2026m000032_What_Human_Health_Data_Is_Being_Collected_from_Artemis_II_Astronauts_260209~large.mp4"],
+   "license":"NASA U.S. Government media","rights_status":"PASS","semantic":93,"crop":"RIGHT"
+  },
+  2:{
+   "source_type":"NASA",
+   "asset_identity":"jsc2026m000004_NASA’s_SpaceX_Crew-11_Science_in_Orbit_250120",
+   "title":"NASA’s SpaceX Crew-11: Science in Orbit",
+   "url":"https://images-assets.nasa.gov/video/jsc2026m000004_NASA’s_SpaceX_Crew-11_Science_in_Orbit_250120/jsc2026m000004_NASA’s_SpaceX_Crew-11_Science_in_Orbit_250120~orig.mp4",
+   "backup":["https://images-assets.nasa.gov/video/jsc2026m000004_NASA’s_SpaceX_Crew-11_Science_in_Orbit_250120/jsc2026m000004_NASA’s_SpaceX_Crew-11_Science_in_Orbit_250120~large.mp4"],
+   "license":"NASA U.S. Government media","rights_status":"PASS","semantic":87,"crop":"CENTER"
+  },
+  3:{
+   "source_type":"COMMONS",
+   "asset_identity":"File:SRF Wissen - Wie entsteht ein Bandscheibenvorfall?.webm",
+   "title":"SRF Wissen - Wie entsteht ein Bandscheibenvorfall?",
+   "url":"https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d3/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm.1080p.vp9.webm?download=",
+   "backup":[],
+   "license":"CC BY-SA 4.0","rights_status":"PASS_ATTRIBUTION_REQUIRED","semantic":96,"crop":"CENTER",
+   "attribution":"Distribution Wissen SRF — CC BY-SA 4.0 — Wikimedia Commons"
+  },
+  5:{
+   "source_type":"NASA",
+   "asset_identity":"KSC-20210502-MH-JBP01_0001-SpaceX_Crew_1_Splashdown_Drone_Imagery-3275583",
+   "title":"SpaceX Crew-1 Splashdown - DRONE",
+   "url":"https://images-assets.nasa.gov/video/KSC-20210502-MH-JBP01_0001-SpaceX_Crew_1_Splashdown_Drone_Imagery-3275583/KSC-20210502-MH-JBP01_0001-SpaceX_Crew_1_Splashdown_Drone_Imagery-3275583~orig.mp4",
+   "backup":[
+    "https://images-assets.nasa.gov/video/KSC-20210502-MH-JBP01_0001-SpaceX_Crew_1_Splashdown_Drone_Imagery-3275583/KSC-20210502-MH-JBP01_0001-SpaceX_Crew_1_Splashdown_Drone_Imagery-3275583~large.mp4",
+    "https://images-assets.nasa.gov/video/KSC-20210502-MH-JBP01_0001-SpaceX_Crew_1_Splashdown_Drone_Imagery-3275583/KSC-20210502-MH-JBP01_0001-SpaceX_Crew_1_Splashdown_Drone_Imagery-3275583~medium.mp4"
+   ],
+   "license":"NASA U.S. Government media","rights_status":"PASS","semantic":90,"crop":"LEFT"
+  }
  }
+ spec=curated.get(n)
+ if not spec:return None
+ pr=probe(spec["url"])
+ if not pr or pr["duration"]<1:return None
+ ok,qs,layout,is4k=classify(pr["width"],pr["height"])
+ if not ok:return None
+ item={
+  "scene":n,"spoken_phrase":scene.get("spoken_phrase",""),"source_type":spec["source_type"],
+  "asset_identity":spec["asset_identity"],"title":spec["title"],
+  "description_excerpt":"Curated stable fallback for the locked astronaut master.",
+  "direct_download_url":spec["url"],
+  "backup_download_urls":spec.get("backup") or [],
+  "source":"NASA Image and Video Library" if spec["source_type"]=="NASA" else "Wikimedia Commons",
+  "license":spec["license"],"rights_status":spec["rights_status"],"media_type":"VIDEO",
+  "width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),
+  "visual_quality_score":qs,"semantic_score":spec["semantic"],"layout_mode":layout,
+  "crop_preference":spec["crop"],"frame_qc":{"pass":True,"score":qs,"reason":"CURATED_STABLE_FALLBACK"},
+  "search_rank":999,"native_4k":is4k,"quality_tier":"NATIVE_4K" if is4k else "FULL_HD_FALLBACK",
+  "status":"CANDIDATE","curated_stable_fallback":True
+ }
+ if spec.get("attribution"):item["attribution"]=spec["attribution"]
+ return item
 
 pools=[]
 for scene in SCENES:
  nasa=collect(scene,"NASA",12)
  commons=collect(scene,"COMMONS",12) if len(nasa)<4 else []
  candidates=nasa+commons
- if not candidates:
-  fallback=known_fallback(scene)
-  if fallback:candidates=[fallback]
+ fallback=known_fallback(scene)
+ if fallback:candidates.append(fallback)
  candidates=list({c["direct_download_url"]:c for c in candidates}.values())
  candidates.sort(key=lambda c:(0 if c.get("native_4k") else 1,0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
  pools.append((scene,candidates))
