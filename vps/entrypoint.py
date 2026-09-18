@@ -15,7 +15,7 @@ def main():
             raise SystemExit(p.returncode)
         MARKER.write_text(json.dumps({"iterations":requested,"passed":True,"finished_at":time.time(),"elapsed_seconds":round(time.time()-started,1)},indent=2),encoding="utf-8")
         print(f"KN preflight passed: {requested}/{requested}; activating worker", flush=True)
-    os.execv(sys.executable,[sys.executable,"-m","vps.worker"])
+    os.execv(sys.executable,[sys.executable,"-m","vps.service"])
 
 if __name__=="__main__":
     main()
