@@ -5,11 +5,11 @@ from PIL import Image,ImageStat,ImageFilter
 
 SCENES=json.loads(os.environ["KN_SCENE_BRIEF"])
 OUT=Path("output"); OUT.mkdir(exist_ok=True)
-BAD=("live video","official stream","live stream","livestream","live event","news conference","press conference","countdown","webinar","presentation","broadcast","briefing","podcast","audio only","weather balloon","simulation","simulator","interview")
+BAD=("live video","official stream","live stream","livestream","live event","news conference","press conference","countdown","webinar","presentation","broadcast","briefing","podcast","audio only","weather balloon","simulation","simulator","interview","greenhouse","antarctica","plant cultivation")
 CONCEPTS={
 1:{"footage_any":["measure","measurement","medical","human research","human body","physiology","health","body","crew medical","astronaut"],"context_any":["astronaut","spaceflight","crew","iss","space station"],"queries":["astronaut body measurement NASA video","astronaut medical examination NASA video","astronaut human research ISS video","astronaut physiology research ISS video"]},
 2:{"footage_any":["microgravity","weightless","floating","zero gravity","zero-g","on station"],"context_any":["astronaut","crew","iss","space station"],"queries":["astronaut floating microgravity ISS video","astronaut weightless inside space station video","crew on station microgravity 4K"]},
-3:{"footage_any":["ultrasound","medical","human research","human body","physiology","health","science experiment","research"],"context_any":["astronaut","crew","iss","space station","spaceflight"],"queries":["astronaut ultrasound ISS video","astronaut human research physiology ISS video","astronaut medical research ISS video","human research space station astronaut video"]},
+3:{"footage_any":["ultrasound","medical","human research","human body","physiology","health","science experiment","research","spine","vertebra","intervertebral","disc","bandscheibe","bandscheiben"],"context_any":["astronaut","crew","iss","space station","spaceflight","spine","vertebra","intervertebral","disc","bandscheibe","bandscheiben"],"queries":["astronaut spinal ultrasound ISS video","spinal ultrasound astronaut video","intervertebral disc spine animation video","intervertebral discs video","Bandscheibenvorfall video"]},
 4:{"footage_any":["astronaut","crew","microgravity","floating","space station","iss","aboard","mission","living","working","research","science","full body","human research","physiology","health","ultra hd","8k"],"context_any":["astronaut","crew","iss","space station","spaceflight","nasa"],"queries":["First 8K Video from Space astronauts","8K astronauts living working space station","NASA astronauts living working aboard ISS","NASA astronaut ISS 4K video","astronaut floating ISS 4K video","astronaut working aboard space station 4K video","astronaut crew space station 4K video","astronaut science research space station 4K video","astronaut living working aboard ISS 4K video"]},
 5:{"footage_any":["landing","landed","return to earth","postflight","post-flight","recovery","splashdown","rehabilitation"],"context_any":["astronaut","crew","spaceflight","nasa"],"queries":["astronaut postflight recovery after landing video","astronaut return Earth recovery NASA video","crew splashdown recovery astronaut 4K video"]}}
 
@@ -26,6 +26,10 @@ def semantic_score(scene,text):
  if not c or any(x in text for x in BAD):return 0
  footage_hits=sum(1 for x in c["footage_any"] if x in text);context_hits=sum(1 for x in c["context_any"] if x in text)
  if footage_hits<1 or context_hits<1:return 0
+ # For the mechanism beat, a licensed moving anatomy source is semantically valid
+ # even without an astronaut in frame; it directly visualizes vertebrae/discs.
+ if int(scene.get("scene") or 0)==3 and any(x in text for x in ("intervertebral","vertebra","spine","bandscheibe","bandscheiben")):
+  return min(100,88+min(12,(footage_hits-1)*3))
  return min(100,72+min(18,(footage_hits-1)*6)+min(10,(context_hits-1)*3))
 
 def title_gate(scene,title):
@@ -34,8 +38,8 @@ def title_gate(scene,title):
  generic=("tour","step inside","earth observations","views of earth","station tour")
  if n in (1,3,4) and any(x in t for x in generic): return False
  if n==1:return any(x in t for x in ("astronaut","crew","human","medical","body","physiology","health","measurement"))
- if n==3:return any(x in t for x in ("astronaut","crew","human","medical","ultrasound","research","science","physiology","health"))
- if n==4:return any(x in t for x in ("astronaut","crew","human","8k","living","working","research","science"))
+ if n==3:return any(x in t for x in ("astronaut","crew","human","medical","ultrasound","research","science","physiology","health","spine","vertebra","intervertebral","bandscheib"))
+ if n==4:return any(x in t for x in ("astronaut","crew","8k")) and not any(x in t for x in ("greenhouse","antarctica","plant"))
  if n==5:return any(x in t for x in ("crew","astronaut","splashdown","landing","recovery","return"))
  return True
 
@@ -76,7 +80,10 @@ def nasa_videos(urls):return sorted([u for u in urls if re.search(r"\.(mp4|mov|m
 def commons_search(q):
  p={"action":"query","generator":"search","gsrsearch":q,"gsrnamespace":6,"gsrlimit":50,"prop":"imageinfo","iiprop":"url|mime|size|extmetadata","format":"json","formatversion":2};return (requests.get("https://commons.wikimedia.org/w/api.php",params=p,headers={"User-Agent":"KnowledgeNuggetsBot/6.0"},timeout=35).json().get("query") or {}).get("pages",[])
 def commons_license(meta):
- lic=((meta.get("LicenseShortName") or {}).get("value") or "");txt=(lic+" "+((meta.get("UsageTerms") or {}).get("value") or "")).lower();return ("public domain" in txt or "cc0" in txt or "pd-usgov" in txt or "pd-nasa" in txt),lic or "Public domain"
+ lic=((meta.get("LicenseShortName") or {}).get("value") or "")
+ txt=(lic+" "+((meta.get("UsageTerms") or {}).get("value") or "")).lower()
+ ok=("public domain" in txt or "cc0" in txt or "pd-usgov" in txt or "pd-nasa" in txt or "cc by" in txt or "creative commons attribution" in txt)
+ return ok,lic or "Public domain"
 def make_candidate(scene,kind,title,desc,url,lic,identity,rank,index):
  if not title_gate(scene,title):return None
  sem=semantic_score(scene,text_blob(title,desc,[]))
