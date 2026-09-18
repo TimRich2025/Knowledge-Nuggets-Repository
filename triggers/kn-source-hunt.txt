@@ -1,2 +1,2 @@
 KN-ASTRONAUT-V4
-build=layout-lock-v5-wikimedia-probe-fix
+build=reliability-v1-target-8pct
