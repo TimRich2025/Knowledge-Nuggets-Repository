@@ -203,7 +203,7 @@ for scene in SCENES:
  fallback=known_fallback(scene)
  if fallback:candidates.append(fallback)
  candidates=list({c["direct_download_url"]:c for c in candidates}.values())
- candidates.sort(key=lambda c:(0 if c.get("native_4k") else 1,0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
+ candidates.sort(key=lambda c:(-c["semantic_score"],0 if c.get("native_4k") else 1,-c["visual_quality_score"],0 if c["source_type"]=="NASA" else 1,c["search_rank"]))
  pools.append((scene,candidates))
 used_urls=set();used_ids=set();manifest=[]
 for scene,candidates in pools:
