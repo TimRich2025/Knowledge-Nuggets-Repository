@@ -1,2 +1,2 @@
 KN-ASTRONAUT-V4
-build=v16-narration-audio-fix
+build=layout-lock-v1
