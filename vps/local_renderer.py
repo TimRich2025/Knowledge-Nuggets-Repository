@@ -11,7 +11,8 @@ ENCODE_H = VIDEO_H + (VIDEO_H % 2)  # H.264 yuv420p requires even dimensions.
 def run(cmd, timeout=240):
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if p.returncode:
-        raise RenderError((p.stderr or p.stdout)[-1800:])
+        detail = (p.stderr or p.stdout or "<no ffmpeg output>")[-1800:]
+        raise RenderError(f"command failed rc={p.returncode}: {detail}")
     return p
 
 def probe_duration(path: Path) -> float:
@@ -81,8 +82,16 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     for idx,(s,dur) in enumerate(zip(scenes,durations),1):
         src=Path(s["local_path"])
         src_dur=probe_duration(src)
-        anchor=float(s.get("validated_frame_time") or src_dur*.35)
-        offset=float(s.get("source_start_offset") or 0)
+        primary=s.get("source_url") or s.get("direct_download_url")
+        if primary and s.get("ingested_from") == primary:
+            anchor=float(s.get("validated_frame_time") or src_dur*.35)
+            offset=float(s.get("source_start_offset") or 0)
+        elif not s.get("ingested_from"):
+            anchor=float(s.get("validated_frame_time") or src_dur*.35)
+            offset=float(s.get("source_start_offset") or 0)
+        else:
+            anchor=src_dur*.35
+            offset=0.0
         start=max(0.0,min(max(0.0,src_dur-dur-.25),anchor-dur/2+offset))
         seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(s)
         if ";" in vf:
