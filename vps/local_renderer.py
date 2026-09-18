@@ -82,6 +82,8 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     for idx,(s,dur) in enumerate(zip(scenes,durations),1):
         src=Path(s["local_path"])
         src_dur=probe_duration(src)
+        if src_dur + 0.12 < dur:
+            raise RenderError(f"scene {idx}: verified visual interval {src_dur:.2f}s shorter than required narration beat {dur:.2f}s")
         primary=s.get("source_url") or s.get("direct_download_url")
         if primary and s.get("ingested_from") == primary:
             anchor=float(s.get("validated_frame_time") or src_dur*.35)
