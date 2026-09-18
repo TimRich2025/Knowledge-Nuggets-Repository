@@ -91,7 +91,18 @@ jobs:
           if not g.get('ready'): raise SystemExit('Source gate not ready; render blocked.')
           PY
       - name: Render locked-layout preview
-        run: python renderer.py
+        run: |
+          set -e
+          for attempt in 1 2; do
+            if python renderer.py; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 2 ]; then
+              echo "Render attempt $attempt failed; retrying once with cached successful source downloads..."
+              sleep 8
+            fi
+          done
+          exit 1
       - name: Enforce layout lock QC
         run: python layout_qc.py
       - name: Upload production plan
