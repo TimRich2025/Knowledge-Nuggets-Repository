@@ -198,11 +198,17 @@ for i,(scene,dur,candidates) in enumerate(zip(scenes,durations,candidate_sets)):
             print(f"Scene {i+1}: trying candidate {attempt}/{min(3,len(candidates))}: {url}", flush=True)
             download(url,source,timeout=(20,180))
             vf=scene_filter(scene)
+            source_duration=ffprobe_duration(source)
+            requested_start=scene.get("source_start")
+            if requested_start is not None:
+                seek=max(0.0,min(max(0.0,source_duration-dur-.25),float(requested_start)))
+            else:
+                seek=max(0.0,min(max(0.0,source_duration-dur-.25),source_duration*.35-dur/2))
             if ";" in vf:
                 filter_complex=f"[0:v]{vf}[vout]"
                 scene_cmd=[
                     "ffmpeg","-hide_banner","-loglevel","error","-y",
-                    "-ss","8","-i",str(source),"-t",f"{dur:.3f}","-an",
+                    "-ss",f"{seek:.3f}","-i",str(source),"-t",f"{dur:.3f}","-an",
                     "-filter_complex",filter_complex,"-map","[vout]",
                     "-c:v","libx264","-preset","ultrafast","-crf","10",
                     "-pix_fmt","yuv420p","-movflags","+faststart",str(clip)
@@ -210,7 +216,7 @@ for i,(scene,dur,candidates) in enumerate(zip(scenes,durations,candidate_sets)):
             else:
                 scene_cmd=[
                     "ffmpeg","-hide_banner","-loglevel","error","-y",
-                    "-ss","8","-i",str(source),"-t",f"{dur:.3f}","-an",
+                    "-ss",f"{seek:.3f}","-i",str(source),"-t",f"{dur:.3f}","-an",
                     "-vf",vf,
                     "-c:v","libx264","-preset","ultrafast","-crf","10",
                     "-pix_fmt","yuv420p","-movflags","+faststart",str(clip)
