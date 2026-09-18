@@ -21,7 +21,7 @@ SESSION.mount("http://", HTTPAdapter(max_retries=Retry(
 class IngestError(RuntimeError): pass
 
 def prune_cache() -> None:
-    limit=max(0.25,float(MAX_CACHE_GB))*1024**3
+    limit=max(0.05,float(MAX_CACHE_GB))*1024**3
     files=[p for p in CACHE.iterdir() if p.is_file() and p.suffix not in {".json",".part"}]
     total=sum(p.stat().st_size for p in files)
     if total <= limit:
@@ -107,6 +107,43 @@ def ingest(urls: list[str], kind: str) -> dict:
     raise IngestError("all approved sources failed ingest: " + " | ".join(errors))
 
 
+def ingest_video_segment(urls: list[str], anchor: float, portrait: bool = False) -> dict:
+    errors=[]
+    start=max(0.0,float(anchor or 0)-1.0)
+    for url in [u for u in urls if u]:
+        key=hashlib.sha256(f"{url}|{start:.2f}|12|1080".encode()).hexdigest()
+        dest=CACHE/f"{key}.mp4"; meta_path=CACHE/f"{key}.json"
+        try:
+            prune_cache()
+            if not dest.exists():
+                tmp=dest.with_suffix(".mp4.part"); tmp.unlink(missing_ok=True)
+                scale="1080:-2" if portrait else "-2:1080"
+                cmd=["ffmpeg","-hide_banner","-loglevel","error","-y",
+                     "-user_agent","KnowledgeNuggetsSourceIngest/2.0",
+                     "-ss",f"{start:.3f}","-i",url,"-t","12",
+                     "-an","-vf",f"scale={scale}",
+                     "-c:v","libx264","-threads","2","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",
+                     "-movflags","+faststart",str(tmp)]
+                p=subprocess.run(cmd,capture_output=True,text=True,timeout=180)
+                if p.returncode:
+                    err=p.stderr[-1200:]
+                    if "429" in err or "Too Many Requests" in err:
+                        raise IngestError(f"origin rate limited source: {url}")
+                    raise IngestError(f"segment ingest ffmpeg failed: {err}")
+                if not tmp.exists() or tmp.stat().st_size < 32_000:
+                    raise IngestError("video segment is implausibly small")
+                os.replace(tmp,dest)
+            probe=ffprobe(dest); media=_video_meta(probe)
+            meta={"key":key,"url":url,"kind":"video_segment","path":str(dest),"bytes":dest.stat().st_size,
+                  "source_anchor":float(anchor or 0),"segment_start":start,**media}
+            meta_path.write_text(json.dumps(meta,indent=2),encoding="utf-8"); os.utime(dest,None)
+            return meta
+        except Exception as e:
+            errors.append(f"{url}: {e}")
+            dest.unlink(missing_ok=True); meta_path.unlink(missing_ok=True)
+            time.sleep(1)
+    raise IngestError("all approved sources failed segment ingest: "+" | ".join(errors))
+
 def ingest_inline_audio(encoded: str) -> dict:
     try:
         raw=base64.b64decode(encoded,validate=True)
@@ -135,7 +172,12 @@ def ingest_job(job: dict) -> dict:
     for s in job.get("scenes") or []:
         primary = s.get("source_url") or s.get("direct_download_url")
         backups = s.get("backup_download_urls") or []
-        media = ingest([primary, *backups], "video")
-        scenes.append({**s, "local_path": media["path"], "ingested_from": media["url"], "ingest_meta": media})
+        anchor=float(s.get("validated_frame_time") or 0)+float(s.get("source_start_offset") or 0)
+        portrait=int(s.get("source_height") or 0) > int(s.get("source_width") or 0)
+        media=ingest_video_segment([primary,*backups],anchor,portrait)
+        scenes.append({**s, "source_validated_frame_time": s.get("validated_frame_time"),
+                       "source_start_offset_original": s.get("source_start_offset"),
+                       "validated_frame_time": 1.0, "source_start_offset": 0,
+                       "local_path":media["path"],"ingested_from":media["url"],"ingest_meta":media})
     if not scenes: raise IngestError("job has no scenes")
     return {"audio": audio, "scenes": scenes}
