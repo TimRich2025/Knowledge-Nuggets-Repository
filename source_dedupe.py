@@ -16,6 +16,7 @@ def probe(url):
         d=json.loads(p.stdout);s=(d.get('streams') or [{}])[0];return int(s.get('width') or 0),int(s.get('height') or 0),float((d.get('format') or {}).get('duration') or 0)
     except:return None
 def native4k(w,h):return (w>=3840 and h>=2160) or (h>=3840 and w>=2160)
+def hd_or_better(w,h):return (w>=1920 and h>=1080) or (h>=1920 and w>=1080)
 def nasa_search(q):return requests.get('https://images-api.nasa.gov/search',params={'q':q,'media_type':'video','page_size':70},timeout=30).json()['collection'].get('items',[])
 def nasa_assets(nid):return [x.get('href','') for x in requests.get('https://images-api.nasa.gov/asset/'+quote(nid,safe=''),timeout=30).json()['collection'].get('items',[])]
 def best_video(urls):
@@ -37,8 +38,8 @@ def replacement(old,used):
             except:continue
             for url in urls:
                 pr=probe(url)
-                if not pr or pr[2]<1 or not native4k(pr[0],pr[1]):continue
-                n=dict(old);n.update({'source_type':'NASA','asset_identity':nid,'title':title,'description_excerpt':re.sub(r'\s+',' ',desc)[:300],'direct_download_url':url,'source':'NASA Image and Video Library','license':'NASA U.S. Government media','width':pr[0],'height':pr[1],'duration':round(pr[2],2),'native_4k':True,'source_family':fam,'dedupe_replacement':True,'render_fallback':old.get('source_type')=='COMMONS'})
+                if not pr or pr[2]<1 or not hd_or_better(pr[0],pr[1]):continue
+                n=dict(old);n.update({'source_type':'NASA','asset_identity':nid,'title':title,'description_excerpt':re.sub(r'\s+',' ',desc)[:300],'direct_download_url':url,'source':'NASA Image and Video Library','license':'NASA U.S. Government media','width':pr[0],'height':pr[1],'duration':round(pr[2],2),'native_4k':native4k(pr[0],pr[1]),'quality_tier':'NATIVE_4K' if native4k(pr[0],pr[1]) else 'FULL_HD_FALLBACK','source_family':fam,'dedupe_replacement':True,'render_fallback':old.get('source_type')=='COMMONS'})
                 return n
     return None
 
@@ -69,7 +70,7 @@ for idx,reason in targets:
         old['render_fallback']='COMMONS_RETAINED_NO_EQUIVALENT_NASA_4K'
 
 selected=[x for x in manifest if x.get('status')=='SELECTED'];families={source_family(x) for x in selected}
-gate=json.loads((OUT/'source_gate.json').read_text(encoding='utf-8'));gate['unique_source_families']=len(families);gate['minimum_unique_source_families']=4;gate['duplicate_variant_policy']='AT_LEAST_FOUR_DISTINCT_FAMILIES;ONE_SCENE_REUSE_ALLOWED';gate['render_source_policy']='NASA_PREFERRED_COMMONS_ALLOWED_WITH_RENDER_RETRY';gate['ready']=len(selected)==len(manifest) and len(families)>=4 and all(x.get('native_4k') for x in selected)
+gate=json.loads((OUT/'source_gate.json').read_text(encoding='utf-8'));gate['unique_source_families']=len(families);gate['minimum_unique_source_families']=4;gate['duplicate_variant_policy']='AT_LEAST_FOUR_DISTINCT_FAMILIES;ONE_SCENE_REUSE_ALLOWED';gate['render_source_policy']='SEMANTIC_FIRST;NASA_PREFERRED;4K_PREFERRED;FULL_HD_FALLBACK_ALLOWED';gate['ready']=len(selected)==len(manifest) and len(families)>=4 and all(hd_or_better(int(x.get('width') or 0),int(x.get('height') or 0)) for x in selected)
 (OUT/'source_manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8');(OUT/'source_gate.json').write_text(json.dumps(gate,indent=2),encoding='utf-8')
 print(json.dumps({'ready':gate['ready'],'selected':len(selected),'unique_source_families':len(families),'families':sorted(families)}))
 if not gate['ready']:raise SystemExit('Render-stable distinct-source-family gate failed')
