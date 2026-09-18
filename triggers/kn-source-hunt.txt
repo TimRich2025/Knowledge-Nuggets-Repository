@@ -1,2 +1,2 @@
 KN-ASTRONAUT-V4
-build=reliability-v1-target-8pct
+build=reliability-v2-font-preflight
