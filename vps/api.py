@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib, hmac, json, re, time, uuid
+import hashlib, hmac, json, re, subprocess, tempfile, time, uuid
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -80,3 +80,20 @@ def public_preview(content_id: str, token: str):
     if root not in p.parents or not p.is_file():
         raise HTTPException(404,"preview artifact unavailable")
     return FileResponse(p,media_type="video/mp4",filename=f"{cid}.mp4")
+
+
+@app.get("/preview/{content_id}/frame")
+def public_preview_frame(content_id: str, token: str, t: float = 1.0):
+    cid=safe_id(content_id)
+    expected=hashlib.sha256(f"{API_TOKEN}:{cid}".encode()).hexdigest()
+    if not API_TOKEN or not hmac.compare_digest(token,expected):
+        raise HTTPException(401,"invalid preview token")
+    p=(OUTPUTS/cid/"preview.mp4").resolve(); root=OUTPUTS.resolve()
+    if root not in p.parents or not p.is_file():
+        raise HTTPException(404,"preview artifact unavailable")
+    out=OUTPUTS/cid/f"frame-{max(0.0,min(float(t),60.0)):.2f}.jpg"
+    cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{max(0.0,min(float(t),60.0)):.3f}","-i",str(p),"-frames:v","1","-vf","scale=270:480","-q:v","5",str(out)]
+    q=subprocess.run(cmd,capture_output=True,text=True,timeout=30)
+    if q.returncode or not out.is_file():
+        raise HTTPException(500,"frame extraction failed")
+    return FileResponse(out,media_type="image/jpeg",filename=out.name)
