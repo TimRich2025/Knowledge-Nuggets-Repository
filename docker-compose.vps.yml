@@ -1,0 +1,23 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: vps/Dockerfile
+    command: uvicorn vps.api:app --host 0.0.0.0 --port 8080
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - kn_data:/data
+  worker:
+    build:
+      context: .
+      dockerfile: vps/Dockerfile
+    command: python -m vps.worker
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - kn_data:/data
+volumes:
+  kn_data:
