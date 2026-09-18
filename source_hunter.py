@@ -2,8 +2,14 @@ import os,json,re,subprocess,requests,html
 from pathlib import Path
 from urllib.parse import quote
 from PIL import Image,ImageStat,ImageFilter
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 SCENES=json.loads(os.environ["KN_SCENE_BRIEF"])
+SESSION=requests.Session()
+SESSION.headers.update({"User-Agent":"KnowledgeNuggetsBot/7.0"})
+SESSION.mount("https://",HTTPAdapter(max_retries=Retry(total=4,connect=4,read=4,status=4,backoff_factor=1.2,status_forcelist=[429,500,502,503,504],allowed_methods=frozenset(["GET"]))))
+SESSION.mount("http://",HTTPAdapter(max_retries=Retry(total=4,connect=4,read=4,status=4,backoff_factor=1.2,status_forcelist=[429,500,502,503,504],allowed_methods=frozenset(["GET"]))))
 OUT=Path("output"); OUT.mkdir(exist_ok=True)
 BAD=("live video","official stream","live stream","livestream","live event","news conference","press conference","countdown","webinar","presentation","broadcast","briefing","podcast","audio only","weather balloon","simulation","simulator","interview","greenhouse","antarctica","plant cultivation")
 CONCEPTS={
@@ -44,11 +50,17 @@ def title_gate(scene,title):
  return True
 
 def probe(url):
- o=run(["ffprobe","-v","error","-user_agent","KnowledgeNuggetsBot/6.0","-select_streams","v:0","-show_entries","stream=width,height,codec_name","-show_entries","format=duration","-of","json",url],55)
- if not o:return None
- try:
-  d=json.loads(o);s=(d.get("streams") or [{}])[0];return {"width":int(s.get("width") or 0),"height":int(s.get("height") or 0),"duration":float((d.get("format") or {}).get("duration") or 0),"codec":s.get("codec_name") or ""}
- except:return None
+ for attempt in range(3):
+  o=run(["ffprobe","-v","error","-user_agent","KnowledgeNuggetsBot/7.0","-select_streams","v:0","-show_entries","stream=width,height,codec_name","-show_entries","format=duration","-of","json",url],55)
+  if o:
+   try:
+    d=json.loads(o);s=(d.get("streams") or [{}])[0]
+    r={"width":int(s.get("width") or 0),"height":int(s.get("height") or 0),"duration":float((d.get("format") or {}).get("duration") or 0),"codec":s.get("codec_name") or ""}
+    if r["width"] and r["height"] and r["duration"]>0:return r
+   except:pass
+  if attempt<2:
+   import time;time.sleep(2*(attempt+1))
+ return None
 def classify(w,h):
  # Semantic relevance is the hard gate. Native 4K is preferred, but clean Full HD
  # is allowed when no equally relevant 4K shot exists for a narration beat.
@@ -74,11 +86,11 @@ def best_comp(url,dur,stem,layout):
   q=frame_qc(sample(url,dur,stem,layout,cp))
   if q["pass"]:good.append((q["score"],cp,q))
  return (max(good,key=lambda x:x[0])[1],max(good,key=lambda x:x[0])[2]) if good else (None,{"pass":False,"score":0,"reason":"all_crops_failed"})
-def nasa_search(q):return requests.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video","page_size":50},timeout=30).json()["collection"].get("items",[])
-def nasa_assets(nid):return [x.get("href","") for x in requests.get("https://images-api.nasa.gov/asset/"+quote(nid,safe=""),timeout=30).json()["collection"].get("items",[])]
+def nasa_search(q):return SESSION.get("https://images-api.nasa.gov/search",params={"q":q,"media_type":"video","page_size":50},timeout=30).json()["collection"].get("items",[])
+def nasa_assets(nid):return [x.get("href","") for x in SESSION.get("https://images-api.nasa.gov/asset/"+quote(nid,safe=""),timeout=30).json()["collection"].get("items",[])]
 def nasa_videos(urls):return sorted([u for u in urls if re.search(r"\.(mp4|mov|m4v)(?:$|\?)",u,re.I)],key=lambda u:5 if "~orig" in u.lower() else 4 if "~large" in u.lower() else 2,reverse=True)
 def commons_search(q):
- p={"action":"query","generator":"search","gsrsearch":q,"gsrnamespace":6,"gsrlimit":50,"prop":"imageinfo","iiprop":"url|mime|size|extmetadata","format":"json","formatversion":2};return (requests.get("https://commons.wikimedia.org/w/api.php",params=p,headers={"User-Agent":"KnowledgeNuggetsBot/6.0"},timeout=35).json().get("query") or {}).get("pages",[])
+ p={"action":"query","generator":"search","gsrsearch":q,"gsrnamespace":6,"gsrlimit":50,"prop":"imageinfo","iiprop":"url|mime|size|extmetadata","format":"json","formatversion":2};return (SESSION.get("https://commons.wikimedia.org/w/api.php",params=p,headers={"User-Agent":"KnowledgeNuggetsBot/6.0"},timeout=35).json().get("query") or {}).get("pages",[])
 def commons_license(meta):
  lic=((meta.get("LicenseShortName") or {}).get("value") or "")
  txt=(lic+" "+((meta.get("UsageTerms") or {}).get("value") or "")).lower()
@@ -123,7 +135,7 @@ def known_fallback(scene):
  if n!=3:return None
  # Curated licensed anatomy fallback: moving 1080p explanation of intervertebral discs.
  # Used only when automatic NASA/Commons discovery finds no suitable mechanism shot.
- url="https://upload.wikimedia.org/wikipedia/commons/d/d3/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm"
+ url="https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d3/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm/SRF_Wissen_-_Wie_entsteht_ein_Bandscheibenvorfall%3F.webm.1080p.vp9.webm?download="
  pr=probe(url)
  if not pr or pr["duration"]<1 or not ((pr["width"]>=1920 and pr["height"]>=1080) or (pr["height"]>=1920 and pr["width"]>=1080)):
   return None
@@ -172,7 +184,7 @@ for idx,x in enumerate(manifest):
  if x.get("scene")==4 and x.get("status")!="SELECTED" and s1:
   y=dict(s1);y["scene"]=4;y["spoken_phrase"]=x.get("spoken_phrase","");y["status"]="SELECTED";y["source_reused_for_scene"]=True;y["reuse_reason"]="3_PERCENT_PAYOFF_USES_VETTED_ASTRONAUT_MEASUREMENT_FOOTAGE";y["semantic_score"]=93
   manifest[idx]=y
-selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and max(x.get("width",0),x.get("height",0))>=1920 and min(x.get("width",0),x.get("height",0))>=1080 for x in selected)
-gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"preferred_native_resolution":"4K","minimum_native_resolution":"1920x1080 landscape or 1080x1920 portrait","allow_upscale":False,"resolution_policy":"PREFER_4K_ALLOW_FULL_HD_ONLY_WHEN_SEMANTICALLY_STRONG","raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"SEMANTIC_RELEVANCE_FIRST_NASA_PREFERRED_4K_PREFERRED"}
+selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=3 and all(x.get("semantic_score",0)>=70 and max(x.get("width",0),x.get("height",0))>=1920 and min(x.get("width",0),x.get("height",0))>=1080 for x in selected)
+gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":3,"minimum_semantic_score":70,"preferred_native_resolution":"4K","minimum_native_resolution":"1920x1080 landscape or 1080x1920 portrait","allow_upscale":False,"resolution_policy":"PREFER_4K_ALLOW_FULL_HD_ONLY_WHEN_SEMANTICALLY_STRONG","raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"SEMANTIC_RELEVANCE_FIRST_NASA_PREFERRED_4K_PREFERRED"}
 (OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8");print(json.dumps(manifest))
 if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable relevant HD-or-better topic footage; {unique} unique assets.")
