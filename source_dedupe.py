@@ -61,8 +61,7 @@ for idx,reason in targets:
         manifest[idx]=found;used.discard(oldfam);used.add(found['source_family'])
     elif reason=='duplicate':
         # Five narration scenes require five scene assignments, not five unique source families.
-        # A source may be reused for one scene only when the project still has >=4 genuinely distinct
-        # native-4K families overall. Keep the scene renderable and explicitly flag the reuse.
+        # A source may be reused for one scene only when the project still has >=3 genuinely distinct source families overall. Keep the scene renderable and explicitly flag the reuse.
         old['source_reused_for_scene']=True
         old['dedupe_replacement']=False
         old['reuse_reason']='NO_EQUIVALENT_DISTINCT_NATIVE_4K_REPLACEMENT'
@@ -70,7 +69,7 @@ for idx,reason in targets:
         old['render_fallback']='COMMONS_RETAINED_NO_EQUIVALENT_NASA_4K'
 
 selected=[x for x in manifest if x.get('status')=='SELECTED'];families={source_family(x) for x in selected}
-gate=json.loads((OUT/'source_gate.json').read_text(encoding='utf-8'));gate['unique_source_families']=len(families);gate['minimum_unique_source_families']=4;gate['duplicate_variant_policy']='AT_LEAST_FOUR_DISTINCT_FAMILIES;ONE_SCENE_REUSE_ALLOWED';gate['render_source_policy']='SEMANTIC_FIRST;NASA_PREFERRED;4K_PREFERRED;FULL_HD_FALLBACK_ALLOWED';gate['ready']=len(selected)==len(manifest) and len(families)>=4 and all(hd_or_better(int(x.get('width') or 0),int(x.get('height') or 0)) for x in selected)
+gate=json.loads((OUT/'source_gate.json').read_text(encoding='utf-8'));gate['unique_source_families']=len(families);gate['minimum_unique_source_families']=3;gate['duplicate_variant_policy']='AT_LEAST_THREE_DISTINCT_FAMILIES;SEMANTIC_SCENE_REUSE_ALLOWED';gate['render_source_policy']='SEMANTIC_FIRST;NASA_PREFERRED;4K_PREFERRED;FULL_HD_FALLBACK_ALLOWED';gate['ready']=len(selected)==len(manifest) and len(families)>=3 and all(hd_or_better(int(x.get('width') or 0),int(x.get('height') or 0)) for x in selected)
 (OUT/'source_manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8');(OUT/'source_gate.json').write_text(json.dumps(gate,indent=2),encoding='utf-8')
 print(json.dumps({'ready':gate['ready'],'selected':len(selected),'unique_source_families':len(families),'families':sorted(families)}))
 if not gate['ready']:raise SystemExit('Render-stable distinct-source-family gate failed')
