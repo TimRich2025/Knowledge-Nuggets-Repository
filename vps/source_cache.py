@@ -107,20 +107,25 @@ def ingest(urls: list[str], kind: str) -> dict:
     raise IngestError("all approved sources failed ingest: " + " | ".join(errors))
 
 
-def ingest_video_segment(urls: list[str], anchor: float, portrait: bool = False) -> dict:
+def ingest_video_segment(urls: list[str], shot_start: float, shot_end: float, portrait: bool = False) -> dict:
     errors=[]
-    start=max(0.0,float(anchor or 0)-1.0)
+    start=max(0.0,float(shot_start))
+    end=float(shot_end)
+    length=end-start
+    if length < 1.5:
+        raise IngestError("verified shot interval must be at least 1.5 seconds")
     for url in [u for u in urls if u]:
-        key=hashlib.sha256(f"{url}|{start:.2f}|12|1080".encode()).hexdigest()
+        key=hashlib.sha256(f"{url}|{start:.3f}|{end:.3f}|1080".encode()).hexdigest()
         dest=CACHE/f"{key}.mp4"; meta_path=CACHE/f"{key}.json"
+        tmp=dest.with_name(dest.stem+".part.mp4")
         try:
             prune_cache()
             if not dest.exists():
-                tmp=dest.with_name(dest.stem+".part.mp4"); tmp.unlink(missing_ok=True)
+                tmp.unlink(missing_ok=True)
                 scale="1080:-2" if portrait else "-2:1080"
                 cmd=["ffmpeg","-hide_banner","-loglevel","error","-y",
-                     "-user_agent","KnowledgeNuggetsSourceIngest/2.0",
-                     "-ss",f"{start:.3f}","-i",url,"-t","12",
+                     "-user_agent","KnowledgeNuggetsSourceIngest/3.0",
+                     "-ss",f"{start:.3f}","-i",url,"-t",f"{length:.3f}",
                      "-an","-vf",f"scale={scale}",
                      "-c:v","libx264","-threads","2","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",
                      "-movflags","+faststart",str(tmp)]
@@ -129,22 +134,20 @@ def ingest_video_segment(urls: list[str], anchor: float, portrait: bool = False)
                     err=p.stderr[-1200:]
                     if "429" in err or "Too Many Requests" in err:
                         raise IngestError(f"origin rate limited source: {url}")
-                    raise IngestError(f"segment ingest ffmpeg failed: {err}")
+                    raise IngestError(f"verified-shot ingest failed: {err}")
                 if not tmp.exists() or tmp.stat().st_size < 32_000:
-                    raise IngestError("video segment is implausibly small")
+                    raise IngestError("verified shot is implausibly small")
                 os.replace(tmp,dest)
             probe=ffprobe(dest); media=_video_meta(probe)
-            meta={"key":key,"url":url,"kind":"video_segment","path":str(dest),"bytes":dest.stat().st_size,
-                  "source_anchor":float(anchor or 0),"segment_start":start,**media}
+            meta={"key":key,"url":url,"kind":"verified_shot","path":str(dest),"bytes":dest.stat().st_size,
+                  "shot_start_seconds":start,"shot_end_seconds":end,**media}
             meta_path.write_text(json.dumps(meta,indent=2),encoding="utf-8"); os.utime(dest,None)
             return meta
         except Exception as e:
             errors.append(f"{url}: {e}")
-            dest.unlink(missing_ok=True); meta_path.unlink(missing_ok=True)
-            try: tmp.unlink(missing_ok=True)
-            except Exception: pass
+            dest.unlink(missing_ok=True); meta_path.unlink(missing_ok=True); tmp.unlink(missing_ok=True)
             time.sleep(1)
-    raise IngestError("all approved sources failed segment ingest: "+" | ".join(errors))
+    raise IngestError("all approved exact-shot sources failed ingest: "+" | ".join(errors))
 
 def ingest_inline_audio(encoded: str) -> dict:
     try:
@@ -174,12 +177,13 @@ def ingest_job(job: dict) -> dict:
     for s in job.get("scenes") or []:
         primary = s.get("source_url") or s.get("direct_download_url")
         backups = s.get("backup_download_urls") or []
-        anchor=float(s.get("validated_frame_time") or 0)+float(s.get("source_start_offset") or 0)
-        portrait=int(s.get("source_height") or 0) > int(s.get("source_width") or 0)
-        media=ingest_video_segment([primary,*backups],anchor,portrait)
-        scenes.append({**s, "source_validated_frame_time": s.get("validated_frame_time"),
-                       "source_start_offset_original": s.get("source_start_offset"),
-                       "validated_frame_time": 1.0, "source_start_offset": 0,
+        if s.get("semantic_match") != "EXACT" or s.get("temporal_match") != "VERIFIED":
+            raise IngestError(f"scene {s.get('scene_number') or s.get('scene')}: exact verified visual match required")
+        shot_start=float(s.get("shot_start_seconds"))
+        shot_end=float(s.get("shot_end_seconds"))
+        portrait=int(s.get("source_height") or s.get("height") or 0) > int(s.get("source_width") or s.get("width") or 0)
+        media=ingest_video_segment([primary,*backups],shot_start,shot_end,portrait)
+        scenes.append({**s, "validated_frame_time": 0.75, "source_start_offset": 0,
                        "local_path":media["path"],"ingested_from":media["url"],"ingest_meta":media})
     if not scenes: raise IngestError("job has no scenes")
     return {"audio": audio, "scenes": scenes}
