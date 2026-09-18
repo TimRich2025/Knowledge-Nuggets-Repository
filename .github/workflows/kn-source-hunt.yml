@@ -31,7 +31,7 @@ jobs:
         run: |
           set -e
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core fonts-noto-core espeak-ng; then
+            if sudo apt-get update && sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core fonts-noto-core fonts-noto-extra espeak-ng; then
               break
             fi
             if [ "$attempt" = "3" ]; then exit 1; fi
@@ -62,7 +62,6 @@ jobs:
           PY
       - name: Find and QC topic-matched motion clips
         id: source_hunt
-        continue-on-error: true
         env:
           INPUT_SCENE_BRIEF: ${{ inputs.scene_brief }}
         run: |
@@ -77,13 +76,10 @@ jobs:
       - name: Reject duplicate source variants and find replacements
         if: steps.source_hunt.outcome == 'success'
         id: dedupe
-        continue-on-error: true
         run: python source_dedupe.py
       - name: Build creative visual and sound direction
-        if: always()
         run: python visual_director.py
       - name: Build locked Knowledge Nuggets layout plan
-        if: always()
         run: python fullscreen_director.py
       - name: Verify source gate before render
         run: |
