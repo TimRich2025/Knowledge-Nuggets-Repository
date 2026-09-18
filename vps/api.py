@@ -1,9 +1,9 @@
 from __future__ import annotations
-import json, re, time, uuid
-from fastapi import FastAPI, Header, HTTPException
+import json, re, time, uuid\nfrom pathlib import Path
+from fastapi import FastAPI, Header, HTTPException\nfrom fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from redis import Redis
-from .config import API_TOKEN, REDIS_URL
+from .config import API_TOKEN, REDIS_URL, OUTPUTS
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
 
@@ -49,3 +49,16 @@ def status(job_id: str, authorization: str | None = Header(default=None)):
     auth(authorization); r=db(); data=r.hgetall(f"kn:job:{safe_id(job_id)}")
     if not data: raise HTTPException(404,"job not found")
     return {"job_id":job_id,"state":data.get("state"),"result":json.loads(data["result"]) if data.get("result") else None,"error":json.loads(data["error"]) if data.get("error") else None}
+
+
+@app.get("/jobs/{job_id}/preview")
+def preview(job_id: str, authorization: str | None = Header(default=None)):
+    auth(authorization); r=db(); data=r.hgetall(f"kn:job:{safe_id(job_id)}")
+    if not data: raise HTTPException(404,"job not found")
+    if data.get("state") != "COMPLETED" or not data.get("result"):
+        raise HTTPException(409,"preview is not ready")
+    result=json.loads(data["result"]); p=Path(result.get("preview_path") or "").resolve()
+    root=OUTPUTS.resolve()
+    if root not in p.parents or not p.is_file():
+        raise HTTPException(404,"preview artifact unavailable")
+    return FileResponse(p,media_type="video/mp4",filename=f"{safe_id(job_id)}.mp4")
