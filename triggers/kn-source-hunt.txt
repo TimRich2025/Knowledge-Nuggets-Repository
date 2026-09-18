@@ -1,2 +1,2 @@
 KN-ASTRONAUT-V4
-build=rc1-semantic-first-deterministic-dedupe
+build=rc2-qc-anchored-shot-selection
