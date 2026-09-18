@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .config import CACHE
+from .config import CACHE, MAX_CACHE_GB
 
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "KnowledgeNuggetsSourceIngest/1.0"})
