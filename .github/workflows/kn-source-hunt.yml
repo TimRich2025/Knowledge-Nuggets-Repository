@@ -14,9 +14,6 @@ on:
         required: false
         default: ""
         type: string
-  push:
-    paths:
-      - "triggers/kn-source-hunt.txt"
 permissions:
   contents: read
 env:
