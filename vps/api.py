@@ -13,7 +13,8 @@ class Job(BaseModel):
     content_id: str = Field(min_length=1,max_length=120)
     production_status: str
     core_question_lines: list[str]
-    audio_url: str
+    audio_url: str | None = None
+    audio_base64: str | None = None
     scenes: list[dict]
     callback_url: str | None = None
 
@@ -40,6 +41,7 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")
+    if not job.audio_url and not job.audio_base64: raise HTTPException(422,"audio_url or audio_base64 required")
     jid=f"{safe_id(job.content_id)}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     r=db(); payload=job.model_dump(); payload["_job_id"]=jid
     r.hset(f"kn:job:{jid}",mapping={"state":"PENDING","payload":json.dumps(payload),"updated_at":str(time.time())})
