@@ -33,7 +33,10 @@ def dl(url,path,max_attempts=5):
             tmp.replace(path); return
         except urllib.error.HTTPError as e:
             last=e
-            if e.code not in (429,500,502,503,504): raise
+            if e.code==429:
+                # Respect the origin rate limit and immediately try the next approved encode/source.
+                raise RuntimeError(f'Origin rate limited this source (HTTP 429): {url}')
+            if e.code not in (500,502,503,504): raise
             ra=e.headers.get('Retry-After') if e.headers else None
             delay=min(120,int(ra)) if ra and ra.isdigit() else waits[min(attempt-1,4)]
         except Exception as e:
@@ -70,25 +73,36 @@ for i,b in enumerate(plan['beats'],1):
     key=hashlib.sha1(safe_url(url).encode()).hexdigest()[:12]
     ext=Path(urllib.parse.urlparse(safe_url(url)).path).suffix.lower()
     raw=MEDIA/f'source_{key}{ext if ext in (".mp4",".mov",".m4v",".webm") else ".mp4"}'
+    used_candidate=url
     if not raw.exists():
         errors=[]
         for candidate in candidates:
             try:
                 dl(candidate,raw,max_attempts=3)
+                used_candidate=candidate
                 break
             except Exception as e:
                 errors.append(str(e))
         if not raw.exists():
             raise RuntimeError(f'Beat {i}: all source encodes failed: {errors}')
-    dur=float(b['duration']); source_dur=float(src.get('duration') or dur)
+    dur=float(b['duration'])
+    # Probe the actual downloaded file because a fallback source may have a different duration.
+    try:
+        p=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(raw)],capture_output=True,text=True,check=True,timeout=30)
+        source_dur=float(p.stdout.strip())
+    except Exception:
+        source_dur=float(src.get('duration') or dur)
     # Seek around the exact frame time that passed source QC. Beat-specific offsets
     # prevent repeated footage when one vetted source legitimately serves two beats.
     if b.get('source_start') is not None:
         start=float(b['source_start'])
-    elif src.get('validated_frame_time') is not None:
+    elif src.get('validated_frame_time') is not None and used_candidate==url:
         anchor=float(src['validated_frame_time'])
         offset=float(b.get('source_start_offset') or 0)
         start=max(0.0,min(max(0.0,source_dur-dur-.25),anchor-dur/2+offset))
+    elif used_candidate!=url:
+        # A cross-source reliability fallback cannot inherit the primary source timestamp.
+        start=max(0.0,min(max(0.0,source_dur-dur-.25),source_dur*.35-dur/2))
     else:
         start=max(0.0,min(max(0.0,source_dur-dur-.25),source_dur*.35-dur/2))
     out=MEDIA/f'beat_{i}.mp4'
