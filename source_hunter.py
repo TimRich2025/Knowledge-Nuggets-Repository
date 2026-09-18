@@ -121,7 +121,9 @@ def collect(scene,kind,limit=12):
     except:continue
     for url in urls[:3]:
      c=make_candidate(scene,"NASA",title," ".join([desc," ".join(kws)]),url,"NASA U.S. Government media",identity,rank,len(out))
-     if c:out.append(c);break
+     if c:
+      c["backup_download_urls"]=[u for u in urls[:3] if u!=url]
+      out.append(c);break
    else:
     title=it.get("title") or "";identity=title;ii=((it.get("imageinfo") or [{}])[0]);meta=ii.get("extmetadata") or {};desc=clean(((meta.get("ImageDescription") or {}).get("value") or ""));url=ii.get("url") or "";mime=(ii.get("mime") or "").lower();oklic,lic=commons_license(meta)
     if identity in seen or semantic_score(scene,text_blob(title,desc,[]))<70 or not title_gate(scene,title) or not oklic or not mime.startswith("video/") or not re.search(r"\.(webm|mp4)(?:$|\?)",url,re.I):continue
