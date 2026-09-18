@@ -106,7 +106,7 @@ def make_candidate(scene,kind,title,desc,url,lic,identity,rank,index):
  if not ok:return None
  cp,fq=best_comp(url,pr["duration"],f"{kind}{scene['scene']}_{index}",layout)
  if not cp:return None
- return {"scene":scene["scene"],"spoken_phrase":scene.get("spoken_phrase",""),"source_type":kind,"asset_identity":identity,"title":title,"description_excerpt":clean(desc)[:300],"direct_download_url":url,"source":"NASA Image and Video Library" if kind=="NASA" else "Wikimedia Commons","license":lic,"rights_status":"PASS","media_type":"VIDEO","width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),"visual_quality_score":qs,"semantic_score":sem,"layout_mode":layout,"crop_preference":cp,"frame_qc":fq,"search_rank":rank,"native_4k":is4k,"quality_tier":"NATIVE_4K" if is4k else "FULL_HD_FALLBACK","status":"CANDIDATE"}
+ return {"scene":scene["scene"],"spoken_phrase":scene.get("spoken_phrase",""),"source_type":kind,"asset_identity":identity,"title":title,"description_excerpt":clean(desc)[:300],"direct_download_url":url,"source":"NASA Image and Video Library" if kind=="NASA" else "Wikimedia Commons","license":lic,"rights_status":"PASS","media_type":"VIDEO","width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),"validated_frame_time":round(max(.2,min(pr["duration"]*.35,max(.2,pr["duration"]-.5))),2),"visual_quality_score":qs,"semantic_score":sem,"layout_mode":layout,"crop_preference":cp,"frame_qc":fq,"search_rank":rank,"native_4k":is4k,"quality_tier":"NATIVE_4K" if is4k else "FULL_HD_FALLBACK","status":"CANDIDATE"}
 def collect(scene,kind,limit=12):
  out=[];seen=set();queries=list(scene.get("search_queries") or [])+CONCEPTS[int(scene["scene"])]["queries"]
  for q in queries:
@@ -187,6 +187,7 @@ def known_fallback(scene):
   "source":"NASA Image and Video Library" if spec["source_type"]=="NASA" else "Wikimedia Commons",
   "license":spec["license"],"rights_status":spec["rights_status"],"media_type":"VIDEO",
   "width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),
+  "validated_frame_time":round(max(.2,min(pr["duration"]*.35,max(.2,pr["duration"]-.5))),2),
   "visual_quality_score":qs,"semantic_score":spec["semantic"],"layout_mode":layout,
   "crop_preference":spec["crop"],"frame_qc":{"pass":True,"score":qs,"reason":"CURATED_STABLE_FALLBACK"},
   "search_rank":999,"native_4k":is4k,"quality_tier":"NATIVE_4K" if is4k else "FULL_HD_FALLBACK",
