@@ -5,5 +5,5 @@ WORKDIR /app
 COPY vps/requirements.txt /app/vps/requirements.txt
 RUN pip install --no-cache-dir -r /app/vps/requirements.txt
 COPY . /app
-RUN python -m py_compile layout_lock.py vps/config.py vps/source_cache.py vps/local_renderer.py vps/pipeline.py vps/api.py vps/worker.py vps/entrypoint.py vps/stress_test.py vps/service.py
+RUN python -m py_compile layout_lock.py vps/config.py vps/source_cache.py vps/local_renderer.py vps/pipeline.py vps/api.py vps/worker.py vps/entrypoint.py vps/stress_test.py vps/service.py vps/source_ingest_smoke.py
 CMD ["python", "-m", "vps.worker"]
