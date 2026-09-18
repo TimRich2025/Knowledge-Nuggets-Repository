@@ -66,10 +66,20 @@ build_header(question_lines,header)
 for i,b in enumerate(plan['beats'],1):
     src=b.get('source') or {}; url=src.get('direct_download_url')
     if not url: raise SystemExit(f'Beat {i}: no source URL')
+    candidates=[url]+[u for u in (src.get('backup_download_urls') or []) if u and u!=url]
     key=hashlib.sha1(safe_url(url).encode()).hexdigest()[:12]
     ext=Path(urllib.parse.urlparse(safe_url(url)).path).suffix.lower()
     raw=MEDIA/f'source_{key}{ext if ext in (".mp4",".mov",".m4v",".webm") else ".mp4"}'
-    if not raw.exists(): dl(url,raw)
+    if not raw.exists():
+        errors=[]
+        for candidate in candidates:
+            try:
+                dl(candidate,raw,max_attempts=3)
+                break
+            except Exception as e:
+                errors.append(str(e))
+        if not raw.exists():
+            raise RuntimeError(f'Beat {i}: all source encodes failed: {errors}')
     dur=float(b['duration']); source_dur=float(src.get('duration') or dur)
     # Temporary fallback only. A later semantic shot-selector can supply source_start.
     start=float(b['source_start']) if b.get('source_start') is not None else max(0.0,min(source_dur-dur-1.0,source_dur*(0.12+0.11*(i-1))))
