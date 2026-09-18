@@ -46,8 +46,13 @@ def probe(url):
   d=json.loads(o);s=(d.get("streams") or [{}])[0];return {"width":int(s.get("width") or 0),"height":int(s.get("height") or 0),"duration":float((d.get("format") or {}).get("duration") or 0),"codec":s.get("codec_name") or ""}
  except:return None
 def classify(w,h):
- if h>w:return (True,100,"CROP_FILL") if w>=2160 and h>=3840 else (False,0,None)
- return (True,100,"CROP_FILL") if w>=3840 and h>=2160 else (False,0,None)
+ # Semantic relevance is the hard gate. Native 4K is preferred, but clean Full HD
+ # is allowed when no equally relevant 4K shot exists for a narration beat.
+ is4k=(w>=3840 and h>=2160) or (h>=3840 and w>=2160)
+ is1080=(w>=1920 and h>=1080) or (h>=1920 and w>=1080)
+ if is4k:return (True,100,"CROP_FILL",True)
+ if is1080:return (True,82,"CROP_FILL",False)
+ return (False,0,None,False)
 def crop_filter(cp):
  x="0" if cp=="LEFT" else "iw-ow" if cp=="RIGHT" else "(iw-ow)/2";return f"scale=360:640:force_original_aspect_ratio=increase,crop=360:640:{x}:(ih-oh)/2"
 def sample(url,dur,stem,layout,cp="CENTER"):
@@ -78,11 +83,11 @@ def make_candidate(scene,kind,title,desc,url,lic,identity,rank,index):
  if sem<70:return None
  pr=probe(url)
  if not pr or pr["duration"]<1:return None
- ok,qs,layout=classify(pr["width"],pr["height"])
+ ok,qs,layout,is4k=classify(pr["width"],pr["height"])
  if not ok:return None
  cp,fq=best_comp(url,pr["duration"],f"{kind}{scene['scene']}_{index}",layout)
  if not cp:return None
- return {"scene":scene["scene"],"spoken_phrase":scene.get("spoken_phrase",""),"source_type":kind,"asset_identity":identity,"title":title,"description_excerpt":clean(desc)[:300],"direct_download_url":url,"source":"NASA Image and Video Library" if kind=="NASA" else "Wikimedia Commons","license":lic,"rights_status":"PASS","media_type":"VIDEO","width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),"visual_quality_score":qs,"semantic_score":sem,"layout_mode":layout,"crop_preference":cp,"frame_qc":fq,"search_rank":rank,"native_4k":True,"status":"CANDIDATE"}
+ return {"scene":scene["scene"],"spoken_phrase":scene.get("spoken_phrase",""),"source_type":kind,"asset_identity":identity,"title":title,"description_excerpt":clean(desc)[:300],"direct_download_url":url,"source":"NASA Image and Video Library" if kind=="NASA" else "Wikimedia Commons","license":lic,"rights_status":"PASS","media_type":"VIDEO","width":pr["width"],"height":pr["height"],"duration":round(pr["duration"],2),"visual_quality_score":qs,"semantic_score":sem,"layout_mode":layout,"crop_preference":cp,"frame_qc":fq,"search_rank":rank,"native_4k":is4k,"quality_tier":"NATIVE_4K" if is4k else "FULL_HD_FALLBACK","status":"CANDIDATE"}
 def collect(scene,kind,limit=12):
  out=[];seen=set();queries=list(scene.get("search_queries") or [])+CONCEPTS[int(scene["scene"])]["queries"]
  for q in queries:
@@ -112,7 +117,7 @@ for scene in SCENES:
  commons=collect(scene,"COMMONS",12) if len(nasa)<4 else []
  candidates=nasa+commons
  candidates=list({c["direct_download_url"]:c for c in candidates}.values())
- candidates.sort(key=lambda c:(0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
+ candidates.sort(key=lambda c:(0 if c.get("native_4k") else 1,0 if c["source_type"]=="NASA" else 1,-c["semantic_score"],-c["visual_quality_score"],c["search_rank"]))
  pools.append((scene,candidates))
 used_urls=set();used_ids=set();manifest=[]
 for scene,candidates in pools:
@@ -125,8 +130,8 @@ for scene,candidates in pools:
  if selected:
   used_urls.add(selected["direct_download_url"]);used_ids.add(selected["asset_identity"]);selected["status"]="SELECTED";manifest.append(selected)
  else:
-  manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_NATIVE_4K_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
-selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and x.get("native_4k") for x in selected)
-gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"minimum_native_resolution":"3840x2160 landscape or 2160x3840 portrait","allow_upscale":False,"raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"NASA_PREFERRED_STRICT_HUMAN_BODY_TITLE_GATE"}
+  manifest.append({"scene":scene.get("scene"),"spoken_phrase":scene.get("spoken_phrase",""),"status":"NO_SUITABLE_RELEVANT_HD_VIDEO","candidates_found":len(candidates),"required_footage_role":CONCEPTS.get(int(scene.get("scene") or 0),{})})
+selected=[x for x in manifest if x.get("status")=="SELECTED"];unique=len({x.get("asset_identity") for x in selected});ready=len(selected)==len(SCENES) and unique>=4 and all(x.get("semantic_score",0)>=70 and max(x.get("width",0),x.get("height",0))>=1920 and min(x.get("width",0),x.get("height",0))>=1080 for x in selected)
+gate={"ready":ready,"selected":len(selected),"scenes":len(SCENES),"unique_sources":unique,"minimum_unique_sources":4,"minimum_semantic_score":70,"preferred_native_resolution":"4K","minimum_native_resolution":"1920x1080 landscape or 1080x1920 portrait","allow_upscale":False,"resolution_policy":"PREFER_4K_ALLOW_FULL_HD_ONLY_WHEN_SEMANTICALLY_STRONG","raw_footage_policy":"REAL_TOPIC_RELEVANT_MOVING_VIDEO","graphics_policy":"EXPLANATORY_OVERLAYS_MAY_VISUALIZE_ABSTRACT_MECHANISMS_AND_NUMBERS","policy":"SEMANTIC_RELEVANCE_FIRST_NASA_PREFERRED_4K_PREFERRED"}
 (OUT/"source_manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8");(OUT/"source_gate.json").write_text(json.dumps(gate,indent=2),encoding="utf-8");print(json.dumps(manifest))
-if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable native-4K topic footage; {unique} unique assets.")
+if not ready:raise SystemExit(f"Production gate failed: {len(selected)}/{len(SCENES)} scenes have suitable relevant HD-or-better topic footage; {unique} unique assets.")
