@@ -43,8 +43,14 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core tesseract-ocr
+          set -e
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core fonts-noto-extra tesseract-ocr espeak-ng; then
+              break
+            fi
+            if [ "$attempt" = "3" ]; then exit 1; fi
+            sleep $((attempt * 8))
+          done
 
       - uses: actions/setup-python@v5
         with:
@@ -56,7 +62,18 @@ jobs:
           path: ~/.cache/huggingface
           key: kn-whisper-base-en-v1
 
-      - run: pip install -r requirements.txt
+      - name: Install Python dependencies
+        run: |
+          for attempt in 1 2 3; do
+            pip install -r requirements.txt && break
+            if [ "$attempt" = "3" ]; then exit 1; fi
+            sleep $((attempt * 5))
+          done
+
+      - name: Renderer preflight
+        run: |
+          python -m py_compile render.py layout_lock.py render_preflight.py
+          python render_preflight.py
 
       - name: Render Short
         env:
