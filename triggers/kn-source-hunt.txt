@@ -1,2 +1,2 @@
 KN-ASTRONAUT-V4
-build=reliability-v2-font-preflight
+build=reliability-v3-validated-render-core
