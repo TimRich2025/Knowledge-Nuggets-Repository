@@ -44,7 +44,7 @@ def title_gate(scene,title):
  return True
 
 def probe(url):
- o=run(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=width,height,codec_name","-show_entries","format=duration","-of","json",url],55)
+ o=run(["ffprobe","-v","error","-user_agent","KnowledgeNuggetsBot/6.0","-select_streams","v:0","-show_entries","stream=width,height,codec_name","-show_entries","format=duration","-of","json",url],55)
  if not o:return None
  try:
   d=json.loads(o);s=(d.get("streams") or [{}])[0];return {"width":int(s.get("width") or 0),"height":int(s.get("height") or 0),"duration":float((d.get("format") or {}).get("duration") or 0),"codec":s.get("codec_name") or ""}
@@ -60,7 +60,7 @@ def classify(w,h):
 def crop_filter(cp):
  x="0" if cp=="LEFT" else "iw-ow" if cp=="RIGHT" else "(iw-ow)/2";return f"scale=360:640:force_original_aspect_ratio=increase,crop=360:640:{x}:(ih-oh)/2"
 def sample(url,dur,stem,layout,cp="CENTER"):
- p=OUT/f"{stem}_{cp.lower()}.jpg";t=max(.2,min((dur or 3)*.35,max(.2,(dur or 3)-.5)));run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{t:.3f}","-i",url,"-frames:v","1","-vf",crop_filter(cp),str(p)],45);return p if p.exists() else None
+ p=OUT/f"{stem}_{cp.lower()}.jpg";t=max(.2,min((dur or 3)*.35,max(.2,(dur or 3)-.5)));run(["ffmpeg","-hide_banner","-loglevel","error","-y","-user_agent","KnowledgeNuggetsBot/6.0","-ss",f"{t:.3f}","-i",url,"-frames:v","1","-vf",crop_filter(cp),str(p)],45);return p if p.exists() else None
 def frame_qc(path):
  if not path:return {"pass":False,"score":0,"reason":"extract_failed_or_timeout"}
  with Image.open(path) as im:
