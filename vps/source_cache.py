@@ -20,6 +20,22 @@ SESSION.mount("http://", HTTPAdapter(max_retries=Retry(
 
 class IngestError(RuntimeError): pass
 
+def prune_cache() -> None:
+    limit=max(0.25,float(MAX_CACHE_GB))*1024**3
+    files=[p for p in CACHE.iterdir() if p.is_file() and p.suffix not in {".json",".part"}]
+    total=sum(p.stat().st_size for p in files)
+    if total <= limit:
+        return
+    for p in sorted(files,key=lambda x:x.stat().st_atime):
+        if total <= limit:
+            break
+        size=p.stat().st_size
+        key=p.stem
+        p.unlink(missing_ok=True)
+        (CACHE/f"{key}.json").unlink(missing_ok=True)
+        total-=size
+
+
 def _key(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
