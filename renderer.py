@@ -1,13 +1,14 @@
-import json, subprocess, urllib.request, urllib.error, urllib.parse, shlex, time
+import json, subprocess, urllib.request, urllib.error, urllib.parse, shlex, time, hashlib
 from pathlib import Path
+from layout_lock import build_header, VIDEO_H, VIDEO_Y
 
 OUT=Path('output'); MEDIA=Path('media'); MEDIA.mkdir(exist_ok=True); OUT.mkdir(exist_ok=True)
 plan=json.loads((OUT/'fullscreen_plan.json').read_text(encoding='utf-8')); clips=[]
-FONT='/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-ORANGE='0xFF7A18'
+SUB_FONT='/usr/share/fonts/truetype/noto/NotoSansDisplay-CondensedBlack.ttf'
 
 def run(cmd):
-    print('+', ' '.join(shlex.quote(str(x)) for x in cmd)); subprocess.run([str(x) for x in cmd],check=True)
+    print('+', ' '.join(shlex.quote(str(x)) for x in cmd), flush=True)
+    subprocess.run([str(x) for x in cmd],check=True)
 
 def safe_url(url):
     p=urllib.parse.urlsplit(str(url).replace('http://images-assets.nasa.gov','https://images-assets.nasa.gov'))
@@ -27,12 +28,14 @@ def dl(url,path,max_attempts=5):
                     b=r.read(1024*1024)
                     if not b: break
                     f.write(b)
-            if not tmp.exists() or tmp.stat().st_size < 1024*1024: raise RuntimeError('download too small')
+            if not tmp.exists() or tmp.stat().st_size < 1024*1024:
+                raise RuntimeError('download too small')
             tmp.replace(path); return
         except urllib.error.HTTPError as e:
             last=e
             if e.code not in (429,500,502,503,504): raise
-            ra=e.headers.get('Retry-After') if e.headers else None; delay=min(120,int(ra)) if ra and ra.isdigit() else waits[min(attempt-1,4)]
+            ra=e.headers.get('Retry-After') if e.headers else None
+            delay=min(120,int(ra)) if ra and ra.isdigit() else waits[min(attempt-1,4)]
         except Exception as e:
             last=e; delay=waits[min(attempt-1,4)]
         finally:
@@ -40,47 +43,59 @@ def dl(url,path,max_attempts=5):
         if attempt < max_attempts: time.sleep(delay)
     raise RuntimeError(f'Download failed: {url}: {last}')
 
-def esc(s): return str(s).replace('\\','\\\\').replace("'","’").replace(':','\\:').replace('%','\\%')
+def esc(s):
+    return str(s).replace('\\','\\\\').replace("'","’").replace(':','\\:').replace('%','\\%')
 
-def caption_filters(cards,dur,scene):
+def caption_filters(cards,dur):
     fs=[]; n=max(1,len(cards)); slot=dur/n
     for j,card in enumerate(cards):
-        a=j*slot; z=min(dur,(j+1)*slot+0.08)
-        size=82 if len(card)<=12 else 68
-        col=ORANGE if ('3%' in card or card in ('GRAVITY','PRESSURE','STRETCHES','TALLER')) else 'white'
-        fs.append(f"drawtext=fontfile={FONT}:text='{esc(card)}':fontcolor={col}:fontsize={size}:borderw=7:bordercolor=black@0.82:x=(w-text_w)/2:y=h*0.70:enable='between(t,{a:.2f},{z:.2f})'")
-    if scene in (2,3):
-        fs += ["drawbox=x=iw*0.47:y=ih*0.30:w=10:h=ih*0.25:color=0xFF7A18@0.85:t=fill",
-               "drawbox=x=iw*0.40:y=ih*0.40:w=iw*0.20:h=8:color=white@0.75:t=fill"]
-    if scene==5:
-        fs += ["drawbox=x=iw*0.15:y=ih*0.22:w=8:h=ih*0.42:color=0xFF7A18@0.9:t=fill",
-               "drawbox=x=iw*0.13:y=ih*0.22:w=50:h=7:color=white@0.9:t=fill",
-               "drawbox=x=iw*0.13:y=ih*0.64:w=50:h=7:color=white@0.9:t=fill"]
-    if scene==6:
-        fs += ["drawbox=x=iw*0.15:y=ih*0.28:w=8:h=ih*0.30:color=0xFF7A18@0.85:t=fill"]
+        text=str(card).strip().upper(); a=j*slot; z=min(dur,(j+1)*slot+0.06)
+        size=68 if len(text)<=13 else 58
+        fs.append(
+            f"drawtext=fontfile={SUB_FONT}:text='{esc(text)}':fontcolor=white:fontsize={size}:"
+            f"borderw=6:bordercolor=black@0.95:x=(w-text_w)/2:y={VIDEO_Y}+(VIDEO_H-text_h)/2:"
+            f"enable='between(t,{a:.2f},{z:.2f})'"
+        )
     return fs
+
+# Fixed shell. No AI may regenerate, move or restyle the brand elements.
+question_lines=plan.get('core_question_lines') or ['WHY DO ASTRONAUTS','GROW TALLER?']
+header=MEDIA/'kn_locked_header.png'
+build_header(question_lines,header)
 
 for i,b in enumerate(plan['beats'],1):
     src=b.get('source') or {}; url=src.get('direct_download_url')
     if not url: raise SystemExit(f'Beat {i}: no source URL')
-    ext=Path(urllib.parse.urlparse(safe_url(url)).path).suffix.lower(); raw=MEDIA/f'source_{i}{ext if ext in (".mp4",".mov",".m4v",".webm") else ".mp4"}'
+    key=hashlib.sha1(safe_url(url).encode()).hexdigest()[:12]
+    ext=Path(urllib.parse.urlparse(safe_url(url)).path).suffix.lower()
+    raw=MEDIA/f'source_{key}{ext if ext in (".mp4",".mov",".m4v",".webm") else ".mp4"}'
     if not raw.exists(): dl(url,raw)
     dur=float(b['duration']); source_dur=float(src.get('duration') or dur)
-    start=max(0.0,min(source_dur-dur-1.0, source_dur*(0.12+0.11*(i-1))))
+    # Temporary fallback only. A later semantic shot-selector can supply source_start.
+    start=float(b['source_start']) if b.get('source_start') is not None else max(0.0,min(source_dur-dur-1.0,source_dur*(0.12+0.11*(i-1))))
     out=MEDIA/f'beat_{i}.mp4'
-    vf=['scale=1080:1920:force_original_aspect_ratio=increase','crop=1080:1920','eq=contrast=1.04:saturation=1.04']
-    vf += caption_filters(b['caption_beats'],dur,i)
-    run(['ffmpeg','-y','-ss',f'{start:.2f}','-i',raw,'-t',f'{dur:.2f}','-an','-vf',','.join(vf),'-r','30','-c:v','libx264','-preset','veryfast','-crf','19','-pix_fmt','yuv420p',out]); clips.append(out)
+    captions=','.join(caption_filters(b['caption_beats'],dur))
+    fc=(f"[0:v]scale=1080:{VIDEO_H}:force_original_aspect_ratio=increase,"
+        f"crop=1080:{VIDEO_H},eq=contrast=1.03:saturation=1.03,"
+        f"pad=1080:1920:0:{VIDEO_Y}:color=black[base];"
+        f"[base][1:v]overlay=0:0[locked];"
+        f"[locked]{captions}[v]")
+    run(['ffmpeg','-y','-ss',f'{start:.2f}','-i',raw,'-loop','1','-i',header,'-t',f'{dur:.2f}',
+         '-filter_complex',fc,'-map','[v]','-an','-r','30','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p',out])
+    clips.append(out)
 
-concat=MEDIA/'concat.txt'; concat.write_text(''.join(f"file '{p.resolve()}'\n" for p in clips),encoding='utf-8')
-base=OUT/'KN-ASTRONAUT-V4_FULLSCREEN_SILENT.mp4'; run(['ffmpeg','-y','-f','concat','-safe','0','-i',concat,'-c','copy',base])
-total=sum(float(b['duration']) for b in plan['beats']); final=OUT/'KN-ASTRONAUT-V4_FULLSCREEN_PREVIEW.mp4'
-# fullscreen_director stores narration in `voice`; accept `narration` for forward compatibility.
+concat=MEDIA/'concat.txt'
+concat.write_text(''.join(f"file '{p.resolve()}'\n" for p in clips),encoding='utf-8')
+base=OUT/'KN-ASTRONAUT-V4_LAYOUT_LOCKED_SILENT.mp4'
+run(['ffmpeg','-y','-f','concat','-safe','0','-i',concat,'-c','copy',base])
+total=sum(float(b['duration']) for b in plan['beats'])
+final=OUT/'KN-ASTRONAUT-V4_LAYOUT_LOCKED_PREVIEW.mp4'
 script=' '.join(str(b.get('voice') or b.get('narration') or '') for b in plan['beats']).strip()
 voice=MEDIA/'temp_voice.wav'
-if script:
-    run(['espeak-ng','-v','en-us','-s','158','-p','42','-w',voice,script])
-    run(['ffmpeg','-y','-i',base,'-i',voice,'-f','lavfi','-i',f'sine=frequency=90:sample_rate=48000:duration={total}', '-filter_complex','[1:a]volume=1.25,highpass=f=80,lowpass=f=9000[v];[2:a]volume=0.010,lowpass=f=300[bed];[v][bed]amix=inputs=2:duration=longest:normalize=0[a]','-map','0:v','-map','[a]','-c:v','copy','-c:a','aac','-b:a','192k','-shortest',final])
-else:
+if not script:
     raise RuntimeError('Fullscreen plan contains no narration/voice text; refusing silent preview')
-print(json.dumps({'rendered':True,'preview':str(final),'beats':len(clips),'duration':total,'temp_voice':bool(script)}))
+run(['espeak-ng','-v','en-us','-s','158','-p','42','-w',voice,script])
+run(['ffmpeg','-y','-i',base,'-i',voice,'-f','lavfi','-i',f'sine=frequency=90:sample_rate=48000:duration={total}',
+     '-filter_complex','[1:a]volume=1.25,highpass=f=80,lowpass=f=9000[v];[2:a]volume=0.010,lowpass=f=300[bed];[v][bed]amix=inputs=2:duration=longest:normalize=0[a]',
+     '-map','0:v','-map','[a]','-c:v','copy','-c:a','aac','-b:a','192k','-shortest',final])
+print(json.dumps({'rendered':True,'preview':str(final),'beats':len(clips),'duration':total,'layout_lock':'KN_LAYOUT_V1'}))
