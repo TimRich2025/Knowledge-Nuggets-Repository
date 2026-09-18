@@ -53,7 +53,7 @@ def caption_filters(cards,dur):
         size=68 if len(text)<=13 else 58
         fs.append(
             f"drawtext=fontfile={SUB_FONT}:text='{esc(text)}':fontcolor=white:fontsize={size}:"
-            f"borderw=6:bordercolor=black@0.95:x=(w-text_w)/2:y={VIDEO_Y}+(VIDEO_H-text_h)/2:"
+            f"borderw=6:bordercolor=black@0.95:x=(w-text_w)/2:y={VIDEO_Y + VIDEO_H/2:.1f}-text_h/2:"
             f"enable='between(t,{a:.2f},{z:.2f})'"
         )
     return fs
