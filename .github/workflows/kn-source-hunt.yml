@@ -30,7 +30,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core espeak-ng
+          sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core fonts-noto-core espeak-ng
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -52,7 +52,7 @@ jobs:
       - name: Build creative visual and sound direction
         if: always()
         run: python visual_director.py
-      - name: Build fullscreen beat and audio direction
+      - name: Build locked Knowledge Nuggets layout plan
         if: always()
         run: python fullscreen_director.py
       - name: Verify source gate before render
@@ -63,8 +63,10 @@ jobs:
           print(json.dumps(g,indent=2))
           if not g.get('ready'): raise SystemExit('Source gate not ready; render blocked.')
           PY
-      - name: Render fullscreen preview
+      - name: Render locked-layout preview
         run: python renderer.py
+      - name: Enforce layout lock QC
+        run: python layout_qc.py
       - name: Upload production plan
         if: always()
         uses: actions/upload-artifact@v4
@@ -75,14 +77,15 @@ jobs:
             output/source_gate.json
             output/visual_plan.json
             output/fullscreen_plan.json
+            output/layout_qc.json
           if-no-files-found: warn
           retention-days: 7
       - name: Upload rendered preview
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kn-fullscreen-preview-${{ env.CONTENT_ID }}
-          path: output/KN-ASTRONAUT-V4_FULLSCREEN_PREVIEW.mp4
+          name: kn-layout-v1-preview-${{ env.CONTENT_ID }}
+          path: output/KN-ASTRONAUT-V4_LAYOUT_LOCKED_PREVIEW.mp4
           if-no-files-found: warn
           retention-days: 7
       - name: Callback to Make
@@ -93,7 +96,8 @@ jobs:
           python - <<'PY'
           import json, os, urllib.request
           gate=json.load(open('output/source_gate.json'))
-          payload={'content_id':os.environ['CONTENT_ID'],'status':'PREVIEW_RENDERED','unique_sources':gate['unique_sources']}
+          qc=json.load(open('output/layout_qc.json'))
+          payload={'content_id':os.environ['CONTENT_ID'],'status':'LAYOUT_LOCKED_PREVIEW_RENDERED','unique_sources':gate['unique_sources'],'layout_qc':qc['pass']}
           req=urllib.request.Request(os.environ['CALLBACK_URL'],data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
           with urllib.request.urlopen(req,timeout=30) as r: print(r.status)
           PY
