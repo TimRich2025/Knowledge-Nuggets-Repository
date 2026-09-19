@@ -64,6 +64,38 @@ def _asset_video_urls(asset_listing_url: str) -> tuple[str | None, str | None, l
     return original, review, storyboard
 
 
+def _asset_metadata(asset_listing_url: str) -> dict[str, Any]:
+    """Read technical metadata published next to the official NASA asset."""
+    metadata_url = asset_listing_url.rsplit("/", 1)[0] + "/metadata.json"
+    try:
+        response = _SESSION.get(metadata_url, timeout=(10, 20))
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return {"metadata_url": metadata_url, "source_width": 0, "source_height": 0, "source_duration": ""}
+    def integer(*keys: str) -> int:
+        for key in keys:
+            try:
+                value = int(float(payload.get(key) or 0))
+            except (TypeError, ValueError):
+                value = 0
+            if value:
+                return value
+        return 0
+    return {
+        "metadata_url": metadata_url,
+        "source_width": integer("QuickTime:SourceImageWidth", "QuickTime:ImageWidth"),
+        "source_height": integer("QuickTime:SourceImageHeight", "QuickTime:ImageHeight"),
+        "source_duration": _text(payload.get("QuickTime:Duration") or payload.get("QuickTime:MediaDuration"), 80),
+    }
+
+
+def _fhd_or_higher(width: int, height: int) -> bool | None:
+    if not width or not height:
+        return None
+    return (width >= 1920 and height >= 1080) or (height >= 1920 and width >= 1080)
+
+
 def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
@@ -105,6 +137,8 @@ def search_nasa_video_candidates(query: str, limit: int = 6) -> list[dict[str, A
             continue
         if not direct_url:
             continue
+        technical = _asset_metadata(asset_listing)
+        fhd = _fhd_or_higher(technical["source_width"], technical["source_height"])
         candidates.append({
             "candidate_id": nasa_id,
             "source_family": "NASA Images",
@@ -117,6 +151,8 @@ def search_nasa_video_candidates(query: str, limit: int = 6) -> list[dict[str, A
             "direct_download_url": direct_url,
             "review_proxy_url": review_url,
             "review_frame_urls": review_frames,
+            **technical,
+            "technical_status": "ELIGIBLE_FHD_OR_HIGHER" if fhd else "REJECT_BELOW_FHD" if fhd is False else "UNVERIFIED_TECHNICAL_METADATA",
             "candidate_status": "UNVERIFIED_REQUIRES_FRAME_REVIEW",
             "rights_status": "UNVERIFIED_REQUIRES_SOURCE_REVIEW",
             "verification_note": "Metadata is discovery evidence only. Extract and inspect a bounded frame probe before assigning a shot interval.",

@@ -100,6 +100,8 @@ def main() -> None:
                 url = candidate["direct_download_url"]
                 if url in used_urls:
                     continue
+                if candidate.get("technical_status") == "REJECT_BELOW_FHD":
+                    continue
                 sheet = REVIEW / f"scene-{scene_number}-candidate-{len(candidates) + 1}.jpg"
                 evidence = _contact_sheet(candidate.get("review_frame_urls") or [], sheet)
                 if not evidence:
