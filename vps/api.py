@@ -1,12 +1,14 @@
 from __future__ import annotations
-import hashlib, hmac, json, re, subprocess, tempfile, time, uuid
+import hashlib, hmac, json, os, re, subprocess, tempfile, time, uuid
 from pathlib import Path
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from redis import Redis
 from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL
 from .visual_contract import validate_visual_contract
+from .source_cache import IngestError
+from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, verify_probe_token
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
 
@@ -19,6 +21,11 @@ class Job(BaseModel):
     scenes: list[dict]
     callback_url: str | None = None
 
+class SourceProbe(BaseModel):
+    source_url: str = Field(min_length=12, max_length=4000)
+    candidate_start_seconds: float = Field(ge=0)
+    candidate_end_seconds: float = Field(gt=0)
+
 def db():
     if not REDIS_URL: raise HTTPException(503,"REDIS_URL is not configured")
     return Redis.from_url(REDIS_URL,decode_responses=True,socket_connect_timeout=5,socket_timeout=5)
@@ -30,11 +37,50 @@ def auth(authorization: str | None):
 def safe_id(v: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+","-",v).strip("-")[:80] or "job"
 
+def public_base_url(request: Request) -> str:
+    configured = (os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
+    if configured:
+        return configured
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc)).split(",")[0].strip()
+    if not host:
+        raise HTTPException(500, "public host unavailable")
+    return f"{proto}://{host}"
+
 @app.get("/health")
 def health():
     try: db().ping(); queue="ok"
     except Exception as e: raise HTTPException(503,f"queue unavailable: {e}")
     return {"ok":True,"service":"kn-render-api","queue":queue,"layout":"KN_LAYOUT_V1"}
+
+@app.post("/source-probes")
+def source_probe(payload: SourceProbe, request: Request, authorization: str | None = Header(default=None)):
+    auth(authorization)
+    try:
+        result = create_source_probe(payload.source_url, payload.candidate_start_seconds, payload.candidate_end_seconds)
+    except IngestError as exc:
+        raise HTTPException(422, str(exc))
+    token = make_probe_token(result["probe_id"])
+    base = public_base_url(request)
+    result["frame_urls"] = [
+        f"{base}/source-probes/{result['probe_id']}/{frame['name']}?token={token}&t={frame['approx_seconds']}"
+        for frame in result.pop("frames")
+    ]
+    result["contact_sheet_url"] = (
+        f"{base}/source-probes/{result['probe_id']}/{result.pop('contact_sheet_name')}?token={token}"
+    )
+    result["evidence_policy"] = "Vision may mark VERIFIED only for a continuous interval visibly proven by these frames; otherwise UNVERIFIED."
+    return result
+
+@app.get("/source-probes/{probe_id}/{frame_name}")
+def source_probe_frame(probe_id: str, frame_name: str, token: str):
+    if not verify_probe_token(probe_id, token):
+        raise HTTPException(401, "invalid probe token")
+    try:
+        path = probe_frame_path(probe_id, frame_name)
+    except IngestError as exc:
+        raise HTTPException(404, str(exc))
+    return FileResponse(path, media_type="image/jpeg", filename=frame_name)
 
 @app.post("/jobs",status_code=202)
 def submit(job: Job, authorization: str | None = Header(default=None)):
