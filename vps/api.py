@@ -8,9 +8,10 @@ from redis import Redis
 from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL
 from .visual_contract import validate_visual_contract
 from .source_cache import IngestError
-from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, verify_probe_token
+from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
+_public_probe_requests: dict[str, list[float]] = {}
 
 class Job(BaseModel):
     content_id: str = Field(min_length=1,max_length=120)
@@ -47,6 +48,16 @@ def public_base_url(request: Request) -> str:
         raise HTTPException(500, "public host unavailable")
     return f"{proto}://{host}"
 
+def allow_public_probe(request: Request) -> None:
+    """Rate-limit the image-only gateway used by Make's existing Vision module."""
+    client = request.client.host if request.client else "unknown"
+    now = time.time()
+    recent = [stamp for stamp in _public_probe_requests.get(client, []) if stamp > now - 600]
+    if len(recent) >= 12:
+        raise HTTPException(429, "source probe rate limit reached")
+    recent.append(now)
+    _public_probe_requests[client] = recent
+
 @app.get("/health")
 def health():
     try: db().ping(); queue="ok"
@@ -81,6 +92,25 @@ def source_probe_frame(probe_id: str, frame_name: str, token: str):
     except IngestError as exc:
         raise HTTPException(404, str(exc))
     return FileResponse(path, media_type="image/jpeg", filename=frame_name)
+
+@app.get("/source-probes/contact-sheet.jpg")
+def public_source_probe_contact_sheet(
+    request: Request,
+    source_url: str,
+    candidate_start_seconds: float,
+    candidate_end_seconds: float,
+):
+    # This route exists because Make's image analyser can fetch an image URL but
+    # the user's plan cannot run Make's generic HTTP module. It exposes only a
+    # bounded contact sheet from an approved public source family, never media.
+    allow_public_probe(request)
+    try:
+        probe_id = source_probe_key(source_url, candidate_start_seconds, candidate_end_seconds)
+        result = create_source_probe(source_url, candidate_start_seconds, candidate_end_seconds, probe_id=probe_id)
+        path = probe_frame_path(result["probe_id"], result["contact_sheet_name"])
+    except IngestError as exc:
+        raise HTTPException(422, str(exc))
+    return FileResponse(path, media_type="image/jpeg", filename="contact-sheet.jpg")
 
 @app.post("/jobs",status_code=202)
 def submit(job: Job, authorization: str | None = Header(default=None)):

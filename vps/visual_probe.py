@@ -18,12 +18,18 @@ PROBE_ROOT = OUTPUTS / "source-probes"
 MAX_WINDOW_SECONDS = 90.0
 MAX_SAMPLES = 12
 PROBE_TTL_SECONDS = 24 * 60 * 60
+ALLOWED_SOURCE_HOST_SUFFIXES = (
+    "nasa.gov", "nih.gov", "nlm.nih.gov", "cdc.gov", "wikimedia.org", "wikipedia.org",
+)
 
 
 def _safe_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise IngestError("source_url must be a direct http(s) video URL")
+    host = (parsed.hostname or "").lower()
+    if not any(host == suffix or host.endswith(f".{suffix}") for suffix in ALLOWED_SOURCE_HOST_SUFFIXES):
+        raise IngestError("source host is outside the approved NASA, US-government, or Wikimedia families")
     return url
 
 
@@ -47,7 +53,32 @@ def verify_probe_token(probe_id: str, token: str) -> bool:
     return bool(API_TOKEN) and hmac.compare_digest(token, make_probe_token(probe_id))
 
 
-def create_source_probe(source_url: str, start_seconds: float, end_seconds: float) -> dict:
+def source_probe_key(source_url: str, start_seconds: float, end_seconds: float) -> str:
+    material = f"{source_url}|{float(start_seconds):.3f}|{float(end_seconds):.3f}".encode()
+    return hashlib.sha256(material).hexdigest()[:32]
+
+
+def _existing_probe(probe_id: str, source_url: str, start: float, end: float, period: float) -> dict | None:
+    target = PROBE_ROOT / probe_id
+    frames = sorted(target.glob("frame-*.jpg")) if target.is_dir() else []
+    sheet = target / "contact-sheet.jpg"
+    if not frames or not sheet.is_file():
+        return None
+    return {
+        "probe_id": probe_id,
+        "source_url": source_url,
+        "candidate_start_seconds": start,
+        "candidate_end_seconds": end,
+        "sample_period_seconds": period,
+        "frames": [
+            {"index": index + 1, "approx_seconds": round(start + index * period, 3), "name": frame.name}
+            for index, frame in enumerate(frames)
+        ],
+        "contact_sheet_name": sheet.name,
+    }
+
+
+def create_source_probe(source_url: str, start_seconds: float, end_seconds: float, probe_id: str | None = None) -> dict:
     """Extract evenly spaced, small JPEG frames from a bounded candidate interval.
 
     This deliberately does not claim that an interval is semantically correct.  It
@@ -64,11 +95,16 @@ def create_source_probe(source_url: str, start_seconds: float, end_seconds: floa
         raise IngestError(f"candidate interval exceeds {MAX_WINDOW_SECONDS:.0f}-second probe limit")
 
     _clean_old_probes()
-    probe_id = uuid.uuid4().hex
+    probe_id = probe_id or uuid.uuid4().hex
     target = PROBE_ROOT / probe_id
-    target.mkdir(parents=True, exist_ok=False)
     sample_count = max(2, min(MAX_SAMPLES, int(window) + 1))
     period = window / sample_count
+    existing = _existing_probe(probe_id, source_url, start, end, period)
+    if existing:
+        return existing
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True, exist_ok=False)
     # The input URL is never interpolated into a shell command.
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -111,7 +147,8 @@ def create_source_probe(source_url: str, start_seconds: float, end_seconds: floa
 
 
 def probe_frame_path(probe_id: str, frame_name: str) -> Path:
-    if not re_fullmatch_hex(probe_id) or not frame_name.startswith("frame-") or not frame_name.endswith(".jpg"):
+    permitted_name = (frame_name.startswith("frame-") and frame_name.endswith(".jpg")) or frame_name == "contact-sheet.jpg"
+    if not re_fullmatch_hex(probe_id) or not permitted_name:
         raise IngestError("invalid probe frame identifier")
     path = (PROBE_ROOT / probe_id / frame_name).resolve()
     root = PROBE_ROOT.resolve()
