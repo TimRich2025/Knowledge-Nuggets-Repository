@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, hashlib, json, os, subprocess, time
+import base64, hashlib, json, os, subprocess, tempfile, time
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
@@ -62,11 +62,12 @@ def _video_meta(probe: dict) -> dict:
         raise IngestError(f"video below Full HD gate: {w}x{h}")
     return {"width": w, "height": h, "duration": duration, "codec": v.get("codec_name")}
 
-def _audio_meta(probe: dict) -> dict:
+def _audio_meta(probe: dict, min_seconds: float = 5.0, max_seconds: float = 60.0) -> dict:
     a = next((s for s in probe.get("streams", []) if s.get("codec_type") == "audio"), None)
     if not a: raise IngestError("download contains no audio stream")
     duration = float(a.get("duration") or probe.get("format", {}).get("duration") or 0)
-    if not 5 <= duration <= 60: raise IngestError(f"unexpected narration duration: {duration:.2f}s")
+    if not min_seconds <= duration <= max_seconds:
+        raise IngestError(f"unexpected narration duration: {duration:.2f}s")
     return {"duration": duration, "codec": a.get("codec_name")}
 
 def _download(url: str, dest: Path) -> None:
@@ -166,16 +167,104 @@ def ingest_inline_audio(encoded: str) -> dict:
     meta_path.write_text(json.dumps(meta,indent=2),encoding="utf-8"); os.utime(dest,None)
     return meta
 
+def ingest_scene_audio(encoded_segments: list[dict | str]) -> tuple[dict, list[dict]]:
+    """Join independently synthesized beat audio and measure its real boundaries.
+
+    Each visual beat is synthesized separately.  Decoding each part to PCM before
+    concatenation makes its start/end timestamps evidence from the generated
+    audio, rather than a timing estimate supplied by an upstream automation.
+    """
+    if not isinstance(encoded_segments, list) or not encoded_segments:
+        raise IngestError("scene_audio_base64 must be a non-empty segment list")
+    normalized: list[str] = []
+    for index, item in enumerate(encoded_segments, 1):
+        if isinstance(item, dict):
+            supplied_number = item.get("scene_number")
+            if supplied_number is not None:
+                try:
+                    if int(supplied_number) != index:
+                        raise IngestError(f"scene audio {index}: scene_number is out of order")
+                except (TypeError, ValueError) as exc:
+                    raise IngestError(f"scene audio {index}: invalid scene_number") from exc
+            item = item.get("audio_base64")
+        if not isinstance(item, str) or not item:
+            raise IngestError(f"scene audio {index}: audio_base64 is required")
+        normalized.append(item)
+    material = "|".join(normalized).encode()
+    key = hashlib.sha256(material).hexdigest()
+    dest = CACHE / f"{key}.wav"
+    meta_path = CACHE / f"{key}.json"
+    timings: list[dict] = []
+    if dest.exists() and meta_path.is_file():
+        try:
+            cached = json.loads(meta_path.read_text(encoding="utf-8"))
+            cached_timings = cached.get("speech_timings") or []
+            if len(cached_timings) == len(normalized):
+                os.utime(dest, None)
+                return ({key: value for key, value in cached.items() if key != "speech_timings"}, cached_timings)
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        dest.unlink(missing_ok=True)
+        meta_path.unlink(missing_ok=True)
+    if not dest.exists():
+        with tempfile.TemporaryDirectory(prefix="scene-audio-", dir=CACHE) as tmp_name:
+            tmp = Path(tmp_name)
+            wavs: list[Path] = []
+            for index, encoded in enumerate(normalized, 1):
+                try:
+                    raw = base64.b64decode(str(encoded), validate=True)
+                except Exception as exc:
+                    raise IngestError(f"scene audio {index}: invalid base64: {exc}") from exc
+                if len(raw) < 1_000:
+                    raise IngestError(f"scene audio {index}: implausibly small")
+                source = tmp / f"part-{index:02d}.mp3"
+                source.write_bytes(raw)
+                wav = tmp / f"part-{index:02d}.wav"
+                command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+                           "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
+                result = subprocess.run(command, capture_output=True, text=True, timeout=90)
+                if result.returncode or not wav.is_file():
+                    raise IngestError(f"scene audio {index}: PCM decode failed: {result.stderr[-500:]}")
+                wavs.append(wav)
+            cursor = 0.0
+            for index, wav in enumerate(wavs, 1):
+                duration = _audio_meta(ffprobe(wav), min_seconds=0.6, max_seconds=60.0)["duration"]
+                if duration < 0.6:
+                    raise IngestError(f"scene audio {index}: shorter than the minimum visual beat")
+                timings.append({"speech_start_seconds": round(cursor, 6), "speech_end_seconds": round(cursor + duration, 6)})
+                cursor += duration
+            listing = tmp / "concat.txt"
+            listing.write_text("\n".join(f"file '{wav.as_posix()}'" for wav in wavs) + "\n", encoding="utf-8")
+            joined = tmp / "joined.wav"
+            command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
+                       "-i", str(listing), "-c:a", "pcm_s16le", str(joined)]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+            if result.returncode or not joined.is_file():
+                raise IngestError(f"scene audio join failed: {result.stderr[-500:]}")
+            os.replace(joined, dest)
+    media = _audio_meta(ffprobe(dest))
+    meta = {"key": key, "url": "inline://scene-tts", "kind": "scene_audio", "path": str(dest),
+            "bytes": dest.stat().st_size, "speech_timings": timings, **media}
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    os.utime(dest, None)
+    return meta, timings
+
 def ingest_job(job: dict) -> dict:
     prune_cache()
-    if job.get("audio_base64"):
+    scene_audio = job.get("scene_audio_base64")
+    speech_timings: list[dict] | None = None
+    if scene_audio:
+        audio, speech_timings = ingest_scene_audio(scene_audio)
+    elif job.get("audio_base64"):
         audio=ingest_inline_audio(job["audio_base64"])
     else:
         audio_url=job.get("audio_url")
         if not audio_url: raise IngestError("audio_url or audio_base64 missing")
         audio=ingest([audio_url],"audio")
     scenes = []
-    for s in job.get("scenes") or []:
+    for index, s in enumerate(job.get("scenes") or []):
+        if speech_timings:
+            s = {**s, **speech_timings[index]}
         try: validate_visual_contract(s, s.get("scene_number") or s.get("scene") or "?")
         except ValueError as e: raise IngestError(str(e))
         primary = s.get("source_url") or s.get("direct_download_url")

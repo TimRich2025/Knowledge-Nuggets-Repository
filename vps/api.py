@@ -23,6 +23,10 @@ class Job(BaseModel):
     core_question_lines: list[str]
     audio_url: str | None = None
     audio_base64: str | None = None
+    # Make's Array Aggregator returns objects.  Accept the minimal object shape
+    # (scene_number + audio_base64) as well as a bare base64 list, then enforce
+    # the exact scene order during ingestion.
+    scene_audio_base64: list[dict | str] | None = None
     scenes: list[dict]
     callback_url: str | None = None
 
@@ -145,6 +149,9 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")
+    derived_speech_timing = bool(job.scene_audio_base64)
+    if derived_speech_timing and len(job.scene_audio_base64 or []) != len(job.scenes):
+        raise HTTPException(422,"scene_audio_base64 must contain exactly one audio segment per scene")
     previous_speech_end = 0.0
     for i,s in enumerate(job.scenes,1):
         try: validate_visual_contract(s, i)
@@ -159,24 +166,26 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
             raise HTTPException(422,f"scene {i}: verified shot interval required")
         if se-ss < 1.5:
             raise HTTPException(422,f"scene {i}: verified shot interval must be at least 1.5s")
-        try:
-            speech_start=float(s["speech_start_seconds"]); speech_end=float(s["speech_end_seconds"])
-        except Exception:
-            raise HTTPException(422,f"scene {i}: verified speech interval required")
-        if speech_start < 0 or speech_end-speech_start < 0.6:
-            raise HTTPException(422,f"scene {i}: invalid verified speech interval")
-        if i == 1 and speech_start > 0.15:
-            raise HTTPException(422,"scene 1: narration must begin inside the first verified beat")
-        if speech_start + 0.05 < previous_speech_end or (i > 1 and abs(speech_start-previous_speech_end) > 0.10):
-            raise HTTPException(422,f"scene {i}: verified speech intervals must be contiguous and ordered")
-        previous_speech_end = speech_end
+        if not derived_speech_timing:
+            try:
+                speech_start=float(s["speech_start_seconds"]); speech_end=float(s["speech_end_seconds"])
+            except Exception:
+                raise HTTPException(422,f"scene {i}: verified speech interval required")
+            if speech_start < 0 or speech_end-speech_start < 0.6:
+                raise HTTPException(422,f"scene {i}: invalid verified speech interval")
+            if i == 1 and speech_start > 0.15:
+                raise HTTPException(422,"scene 1: narration must begin inside the first verified beat")
+            if speech_start + 0.05 < previous_speech_end or (i > 1 and abs(speech_start-previous_speech_end) > 0.10):
+                raise HTTPException(422,f"scene {i}: verified speech intervals must be contiguous and ordered")
+            previous_speech_end = speech_end
         if float(s.get("semantic_score") or 0) < 94:
             raise HTTPException(422,f"scene {i}: semantic score below exact-match gate")
         if str(s.get("media_type") or "").upper() != "VIDEO":
             raise HTTPException(422,f"scene {i}: real video source required")
         if not (s.get("source_url") or s.get("direct_download_url")):
             raise HTTPException(422,f"scene {i}: exact direct video URL required")
-    if not job.audio_url and not job.audio_base64: raise HTTPException(422,"audio_url or audio_base64 required")
+    if not job.audio_url and not job.audio_base64 and not job.scene_audio_base64:
+        raise HTTPException(422,"audio_url, audio_base64, or scene_audio_base64 required")
     jid=f"{safe_id(job.content_id)}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     r=db(); payload=job.model_dump(); payload["_job_id"]=jid
     r.hset(f"kn:job:{jid}",mapping={"state":"PENDING","payload":json.dumps(payload),"updated_at":str(time.time())})
