@@ -59,11 +59,9 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
             raise HTTPException(422,f"scene {i}: verified shot interval must be at least 1.5s")
         if float(s.get("semantic_score") or 0) < 94:
             raise HTTPException(422,f"scene {i}: semantic score below exact-match gate")
-        if str(s.get("media_type") or "").upper() == "ORIGINAL_EXPLAINER":
-            spec = s.get("original_explainer")
-            if not isinstance(spec, dict) or not str(spec.get("kind") or ""):
-                raise HTTPException(422,f"scene {i}: original_explainer kind required")
-        elif not (s.get("source_url") or s.get("direct_download_url")):
+        if str(s.get("media_type") or "").upper() != "VIDEO":
+            raise HTTPException(422,f"scene {i}: real video source required")
+        if not (s.get("source_url") or s.get("direct_download_url")):
             raise HTTPException(422,f"scene {i}: exact direct video URL required")
     if not job.audio_url and not job.audio_base64: raise HTTPException(422,"audio_url or audio_base64 required")
     jid=f"{safe_id(job.content_id)}-{int(time.time())}-{uuid.uuid4().hex[:8]}"

@@ -184,14 +184,11 @@ def ingest_job(job: dict) -> dict:
             raise IngestError(f"scene {s.get('scene_number') or s.get('scene')}: exact verified visual match required")
         shot_start=float(s.get("shot_start_seconds"))
         shot_end=float(s.get("shot_end_seconds"))
-        if str(s.get("media_type") or "").upper() == "ORIGINAL_EXPLAINER":
-            from .original_explainer import render_original_explainer
-            key = hashlib.sha256(json.dumps({"spec": s.get("original_explainer"), "start": shot_start, "end": shot_end}, sort_keys=True).encode()).hexdigest()
-            media = render_original_explainer(s.get("original_explainer") or {}, CACHE / f"{key}.mp4", shot_end - shot_start)
-        else:
-            portrait=int(s.get("source_height") or s.get("height") or 0) > int(s.get("source_width") or s.get("width") or 0)
-            media=ingest_video_segment([primary,*backups],shot_start,shot_end,portrait)
+        if str(s.get("media_type") or "").upper() != "VIDEO":
+            raise IngestError(f"scene {s.get('scene_number') or s.get('scene')}: real video source required")
+        portrait=int(s.get("source_height") or s.get("height") or 0) > int(s.get("source_width") or s.get("width") or 0)
+        media=ingest_video_segment([primary,*backups],shot_start,shot_end,portrait)
         scenes.append({**s, "validated_frame_time": 0.75, "source_start_offset": 0,
-                       "local_path":media["path"],"ingested_from":media.get("url", "original://deterministic-explainer"),"ingest_meta":media})
+                       "local_path":media["path"],"ingested_from":media["url"],"ingest_meta":media})
     if not scenes: raise IngestError("job has no scenes")
     return {"audio": audio, "scenes": scenes}

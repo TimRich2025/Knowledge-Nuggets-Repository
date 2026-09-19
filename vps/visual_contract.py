@@ -22,3 +22,5 @@ def validate_visual_contract(scene: dict, number: int | str) -> None:
         items = []
     if not items:
         raise ValueError(f"scene {number}: must_show evidence is required")
+    if str(scene.get("media_type") or "").upper() == "ORIGINAL_EXPLAINER":
+        raise ValueError(f"scene {number}: generated explanatory objects are forbidden")
