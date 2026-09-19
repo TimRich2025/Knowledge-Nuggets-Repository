@@ -73,8 +73,25 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     audio=Path(ingested["audio"]["path"])
     audio_dur=probe_duration(audio)
     if not 15 <= audio_dur <= 30.5: raise RenderError(f"narration outside 15-30s target: {audio_dur:.2f}s")
-    requested=[max(.8,float(s.get("duration") or 3.0)) for s in scenes]
-    scale=audio_dur/sum(requested); durations=[d*scale for d in requested]
+    speech_intervals=[]
+    previous_end=0.0
+    for idx, scene in enumerate(scenes, 1):
+        try:
+            start=float(scene["speech_start_seconds"])
+            end=float(scene["speech_end_seconds"])
+        except Exception as exc:
+            raise RenderError(f"scene {idx}: verified speech interval required") from exc
+        if start < 0 or end-start < .6 or start + .05 < previous_end or (idx > 1 and abs(start-previous_end) > .10):
+            raise RenderError(f"scene {idx}: invalid verified speech interval")
+        if end > audio_dur + .10:
+            raise RenderError(f"scene {idx}: verified speech interval exceeds narration")
+        speech_intervals.append((start,end))
+        previous_end=end
+    if speech_intervals[0][0] > .15:
+        raise RenderError("narration begins before the first verified visual beat")
+    if audio_dur-speech_intervals[-1][1] > .35:
+        raise RenderError("narration continues after the last verified visual beat")
+    durations=[end-start for start,end in speech_intervals]
 
     header=job_dir/"header.png"; build_header(q,header)
     ass=job_dir/"captions.ass"; build_ass(scenes,durations,ass)

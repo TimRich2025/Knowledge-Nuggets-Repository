@@ -145,6 +145,7 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")
+    previous_speech_end = 0.0
     for i,s in enumerate(job.scenes,1):
         try: validate_visual_contract(s, i)
         except ValueError as e: raise HTTPException(422, str(e))
@@ -158,6 +159,17 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
             raise HTTPException(422,f"scene {i}: verified shot interval required")
         if se-ss < 1.5:
             raise HTTPException(422,f"scene {i}: verified shot interval must be at least 1.5s")
+        try:
+            speech_start=float(s["speech_start_seconds"]); speech_end=float(s["speech_end_seconds"])
+        except Exception:
+            raise HTTPException(422,f"scene {i}: verified speech interval required")
+        if speech_start < 0 or speech_end-speech_start < 0.6:
+            raise HTTPException(422,f"scene {i}: invalid verified speech interval")
+        if i == 1 and speech_start > 0.15:
+            raise HTTPException(422,"scene 1: narration must begin inside the first verified beat")
+        if speech_start + 0.05 < previous_speech_end or (i > 1 and abs(speech_start-previous_speech_end) > 0.10):
+            raise HTTPException(422,f"scene {i}: verified speech intervals must be contiguous and ordered")
+        previous_speech_end = speech_end
         if float(s.get("semantic_score") or 0) < 94:
             raise HTTPException(422,f"scene {i}: semantic score below exact-match gate")
         if str(s.get("media_type") or "").upper() != "VIDEO":
