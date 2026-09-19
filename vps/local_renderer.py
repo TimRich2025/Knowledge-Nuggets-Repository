@@ -84,17 +84,10 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         src_dur=probe_duration(src)
         if src_dur + 0.12 < dur:
             raise RenderError(f"scene {idx}: verified visual interval {src_dur:.2f}s shorter than required narration beat {dur:.2f}s")
-        primary=s.get("source_url") or s.get("direct_download_url")
-        if primary and s.get("ingested_from") == primary:
-            anchor=float(s.get("validated_frame_time") or src_dur*.35)
-            offset=float(s.get("source_start_offset") or 0)
-        elif not s.get("ingested_from"):
-            anchor=float(s.get("validated_frame_time") or src_dur*.35)
-            offset=float(s.get("source_start_offset") or 0)
-        else:
-            anchor=src_dur*.35
-            offset=0.0
-        start=max(0.0,min(max(0.0,src_dur-dur-.25),anchor-dur/2+offset))
+        # `local_path` is exactly the source interval approved by visual review.
+        # A renderer may shorten its tail for narration timing but must never seek
+        # to another moment inside or outside that approved interval.
+        start=0.0
         seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(s)
         if ";" in vf:
             fc=f"[0:v]{vf}[v]"
