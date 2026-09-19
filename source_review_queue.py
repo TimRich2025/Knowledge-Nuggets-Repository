@@ -100,7 +100,15 @@ def main() -> None:
                 url = candidate["direct_download_url"]
                 if url in used_urls:
                     continue
-                if candidate.get("technical_status") == "REJECT_BELOW_FHD":
+                # Catalogue metadata is useful but not authoritative enough to
+                # admit an unknown-quality file.  Probe the actual stream before
+                # any visual contact sheet is created, so sub-HD and technically
+                # opaque candidates cannot enter the review queue.
+                technical = _probe(url)
+                if not technical or not (
+                    (technical["width"] >= 1920 and technical["height"] >= 1080)
+                    or (technical["height"] >= 1920 and technical["width"] >= 1080)
+                ):
                     continue
                 sheet = REVIEW / f"scene-{scene_number}-candidate-{len(candidates) + 1}.jpg"
                 evidence = _contact_sheet(candidate.get("review_frame_urls") or [], sheet)
@@ -109,6 +117,12 @@ def main() -> None:
                 used_urls.add(url)
                 candidates.append({
                     **candidate,
+                    "source_width": technical["width"],
+                    "source_height": technical["height"],
+                    "source_duration_seconds": round(technical["duration"], 3),
+                    "source_codec": technical["codec"],
+                    "technical_status": "ELIGIBLE_FHD_OR_HIGHER",
+                    "technical_evidence": "FFPROBE_DIRECT_VIDEO",
                     "review_evidence": {**evidence, "type": "NASA_CATALOG_STORYBOARD", "timecodes": "UNAVAILABLE"},
                     "contact_sheet": str(sheet),
                     "semantic_match": "UNVERIFIED",
