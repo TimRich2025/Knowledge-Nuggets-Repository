@@ -184,8 +184,11 @@ def render_original_explainer(spec: dict, output: Path, duration: float) -> dict
         eased = p * p * (3 - 2 * p)
         _frame(kind, eased).save(frames / f"frame-{i:05d}.png")
     tmp = output.with_suffix(".part.mp4")
+    # The PNGs are the 4K masters.  The worker cache is deliberately made
+    # Full HD here: it is the renderer's delivery intermediate and avoids an
+    # unnecessary 4K H.264 encoder spike on the small persistent worker.
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-framerate", str(FPS), "-i", str(frames / "frame-%05d.png"),
-           "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(tmp)]
+           "-vf", "scale=1920:1080:flags=lanczos", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(tmp)]
     run = subprocess.run(cmd, capture_output=True, text=True, timeout=360)
     if run.returncode or not tmp.is_file():
         raise ExplainerError(f"original explainer render failed: {run.stderr[-1000:]}")
