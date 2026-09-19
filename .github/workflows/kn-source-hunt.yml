@@ -7,8 +7,7 @@ on:
         required: true
         type: string
       scene_brief:
-        required: false
-        default: ""
+        required: true
         type: string
       callback_url:
         required: false
@@ -17,18 +16,18 @@ on:
 permissions:
   contents: read
 env:
-  CONTENT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.content_id || 'KN-ASTRONAUT-V4' }}
+  CONTENT_ID: ${{ inputs.content_id }}
 jobs:
   hunt:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
         run: |
           set -e
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y ffmpeg tesseract-ocr fonts-dejavu-core fonts-noto-core fonts-noto-extra espeak-ng; then
+            if sudo apt-get update && sudo apt-get install -y ffmpeg; then
               break
             fi
             if [ "$attempt" = "3" ]; then exit 1; fi
@@ -47,80 +46,27 @@ jobs:
           done
       - name: Static preflight
         run: |
-          python -m py_compile source_hunter.py source_dedupe.py visual_director.py fullscreen_director.py renderer.py layout_lock.py layout_qc.py render_preflight.py
-          python - <<'PY'
-          from pathlib import Path
-          import layout_lock
-          assert Path(layout_lock.LOGO_PATH).is_file(), "Official logo asset missing"
-          assert Path(layout_lock.BRAND_FONT).is_file(), "Brand font missing"
-          assert Path(layout_lock.QUESTION_FONT).is_file(), "Question/subtitle font missing"
-          layout_lock.build_header(["WHY DO ASTRONAUTS","GROW TALLER?"],"output/preflight_header.png")
-          print("Renderer assets OK:", layout_lock.BRAND_FONT, layout_lock.QUESTION_FONT)
-          PY
-          python render_preflight.py
-      - name: Find and QC topic-matched motion clips
-        id: source_hunt
+          python -m py_compile vps/source_catalog.py source_review_queue.py
+      - name: Discover official candidates and build contact sheets
         env:
           INPUT_SCENE_BRIEF: ${{ inputs.scene_brief }}
         run: |
-          if [ "$CONTENT_ID" = "KN-ASTRONAUT-V4" ]; then export KN_SCENE_BRIEF="$(cat presets/astronaut_v4.json)"; else export KN_SCENE_BRIEF="$INPUT_SCENE_BRIEF"; fi
+          export KN_SCENE_BRIEF="$INPUT_SCENE_BRIEF"
           for attempt in 1 2; do
-            python source_hunter.py && break
+            python source_review_queue.py && break
             code=$?
             if [ "$attempt" = "2" ]; then exit "$code"; fi
             echo "Source discovery attempt $attempt failed; retrying after backoff..."
             sleep 8
           done
-      - name: Reject duplicate source variants and find replacements
-        if: steps.source_hunt.outcome == 'success'
-        id: dedupe
-        run: python source_dedupe.py
-      - name: Build creative visual and sound direction
-        run: python visual_director.py
-      - name: Build locked Knowledge Nuggets layout plan
-        run: python fullscreen_director.py
-      - name: Verify source gate before render
-        run: |
-          python - <<'PY'
-          import json
-          g=json.load(open('output/source_gate.json'))
-          print(json.dumps(g,indent=2))
-          if not g.get('ready'): raise SystemExit('Source gate not ready; render blocked.')
-          PY
-      - name: Render locked-layout preview
-        run: |
-          set -e
-          for attempt in 1 2; do
-            if python renderer.py; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 2 ]; then
-              echo "Render attempt $attempt failed; retrying once with cached successful source downloads..."
-              sleep 8
-            fi
-          done
-          exit 1
-      - name: Enforce layout lock QC
-        run: python layout_qc.py
-      - name: Upload production plan
+      - name: Upload visual review queue
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kn-production-plan-${{ env.CONTENT_ID }}
+          name: kn-source-review-${{ env.CONTENT_ID }}
           path: |
-            output/source_manifest.json
-            output/source_gate.json
-            output/visual_plan.json
-            output/fullscreen_plan.json
-            output/layout_qc.json
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Upload rendered preview
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kn-layout-v1-preview-${{ env.CONTENT_ID }}
-          path: output/KN-ASTRONAUT-V4_LAYOUT_LOCKED_PREVIEW.mp4
+            output/source_review_queue.json
+            output/source-review/*.jpg
           if-no-files-found: warn
           retention-days: 7
       - name: Callback to Make
@@ -130,9 +76,8 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, urllib.request
-          gate=json.load(open('output/source_gate.json'))
-          qc=json.load(open('output/layout_qc.json'))
-          payload={'content_id':os.environ['CONTENT_ID'],'status':'LAYOUT_LOCKED_PREVIEW_RENDERED','unique_sources':gate['unique_sources'],'layout_qc':qc['pass']}
+          queue=json.load(open('output/source_review_queue.json'))
+          payload={'content_id':os.environ['CONTENT_ID'],'status':'VISUAL_REVIEW_REQUIRED','render_allowed':False,'scenes':len(queue['scenes'])}
           req=urllib.request.Request(os.environ['CALLBACK_URL'],data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
           with urllib.request.urlopen(req,timeout=30) as r: print(r.status)
           PY

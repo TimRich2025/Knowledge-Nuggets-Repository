@@ -7,8 +7,9 @@ NASA video candidates that can subsequently be probed frame by frame.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -29,18 +30,38 @@ def _approved_nasa_url(url: str) -> bool:
     return parsed.scheme == "https" and (host == "nasa.gov" or host.endswith(".nasa.gov"))
 
 
-def _asset_video_url(asset_listing_url: str) -> str | None:
-    """Resolve one NASA asset listing to a direct MP4 without guessing a URL."""
+def _nasa_https_url(url: str) -> str | None:
+    """Upgrade NASA catalogue HTTP links to HTTPS after validating the host."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in {"http", "https"} or not (host == "nasa.gov" or host.endswith(".nasa.gov")):
+        return None
+    return urlunparse(parsed._replace(scheme="https"))
+
+
+def _asset_video_urls(asset_listing_url: str) -> tuple[str | None, str | None, list[str]]:
+    """Resolve original MP4, review MP4, and official storyboard frames."""
     response = _SESSION.get(asset_listing_url, timeout=(10, 25))
     response.raise_for_status()
     links = response.json()
     if not isinstance(links, list):
-        return None
-    videos = [str(link) for link in links if isinstance(link, str) and link.lower().split("?")[0].endswith(".mp4")]
-    # NASA normally supplies a ~orig asset. Prefer it, then retain the first
-    # actual MP4 returned by the official listing.
-    videos.sort(key=lambda link: ("~orig" not in link.lower(), len(link)))
-    return next((link for link in videos if _approved_nasa_url(link)), None)
+        return None, None, []
+    secured_links = [secured for link in links if isinstance(link, str) for secured in [_nasa_https_url(link)] if secured]
+    videos = [link for link in secured_links if link.lower().split("?")[0].endswith(".mp4")]
+    originals = sorted(videos, key=lambda link: ("~orig" not in link.lower(), len(link)))
+    review_variants = sorted(
+        videos,
+        key=lambda link: (
+            0 if "~preview" in link.lower() else 1 if "~small" in link.lower() else 2 if "~medium" in link.lower() else 3 if "~large" in link.lower() else 4,
+            len(link),
+        ),
+    )
+    original = next((link for link in originals if _approved_nasa_url(link)), None)
+    review = next((link for link in review_variants if _approved_nasa_url(link)), original)
+    medium_frames = [link for link in secured_links if re.search(r"~medium_\d+\.jpg(?:$|\?)", link, re.I)]
+    large_frames = [link for link in secured_links if re.search(r"~large_\d+\.jpg(?:$|\?)", link, re.I)]
+    storyboard = sorted(medium_frames or large_frames)[:8]
+    return original, review, storyboard
 
 
 def _text(value: Any, limit: int) -> str:
@@ -79,7 +100,7 @@ def search_nasa_video_candidates(query: str, limit: int = 6) -> list[dict[str, A
         if not nasa_id or not isinstance(asset_listing, str) or not _approved_nasa_url(asset_listing):
             continue
         try:
-            direct_url = _asset_video_url(asset_listing)
+            direct_url, review_url, review_frames = _asset_video_urls(asset_listing)
         except (requests.RequestException, ValueError):
             continue
         if not direct_url:
@@ -94,6 +115,8 @@ def search_nasa_video_candidates(query: str, limit: int = 6) -> list[dict[str, A
             "catalog_page_url": _text(item.get("links", [{}])[0].get("href") if item.get("links") else "", 2000),
             "asset_listing_url": asset_listing,
             "direct_download_url": direct_url,
+            "review_proxy_url": review_url,
+            "review_frame_urls": review_frames,
             "candidate_status": "UNVERIFIED_REQUIRES_FRAME_REVIEW",
             "rights_status": "UNVERIFIED_REQUIRES_SOURCE_REVIEW",
             "verification_note": "Metadata is discovery evidence only. Extract and inspect a bounded frame probe before assigning a shot interval.",
