@@ -1,8 +1,8 @@
 from __future__ import annotations
-import hashlib, hmac, json, os, re, subprocess, tempfile, time, uuid
+import base64, hashlib, hmac, json, os, re, subprocess, tempfile, time, uuid
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from redis import Redis
 from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL
@@ -12,6 +12,9 @@ from .visual_probe import create_source_probe, make_probe_token, probe_frame_pat
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
 _public_probe_requests: dict[str, list[float]] = {}
+_MISSING_PROBE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlP2r8AAAAASUVORK5CYII="
+)
 
 class Job(BaseModel):
     content_id: str = Field(min_length=1,max_length=120)
@@ -104,6 +107,8 @@ def public_source_probe_contact_sheet(
     # the user's plan cannot run Make's generic HTTP module. It exposes only a
     # bounded contact sheet from an approved public source family, never media.
     allow_public_probe(request)
+    if source_url == "MISSING":
+        return Response(content=_MISSING_PROBE_PNG, media_type="image/png")
     try:
         probe_id = source_probe_key(source_url, candidate_start_seconds, candidate_end_seconds)
         result = create_source_probe(source_url, candidate_start_seconds, candidate_end_seconds, probe_id=probe_id)
