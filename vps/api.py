@@ -9,6 +9,7 @@ from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL
 from .visual_contract import validate_visual_contract
 from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
+from .source_catalog import SourceCatalogError, search_nasa_video_candidates
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
 _public_probe_requests: dict[str, list[float]] = {}
@@ -29,6 +30,10 @@ class SourceProbe(BaseModel):
     source_url: str = Field(min_length=12, max_length=4000)
     candidate_start_seconds: float = Field(ge=0)
     candidate_end_seconds: float = Field(gt=0)
+
+class SourceCandidateSearch(BaseModel):
+    query: str = Field(min_length=2, max_length=240)
+    limit: int = Field(default=6, ge=1, le=12)
 
 def db():
     if not REDIS_URL: raise HTTPException(503,"REDIS_URL is not configured")
@@ -85,6 +90,21 @@ def source_probe(payload: SourceProbe, request: Request, authorization: str | No
     )
     result["evidence_policy"] = "Vision may mark VERIFIED only for a continuous interval visibly proven by these frames; otherwise UNVERIFIED."
     return result
+
+@app.post("/source-candidates")
+def source_candidates(payload: SourceCandidateSearch, authorization: str | None = Header(default=None)):
+    """Discover direct official candidates, never an approval or render input."""
+    auth(authorization)
+    try:
+        candidates = search_nasa_video_candidates(payload.query, payload.limit)
+    except SourceCatalogError as exc:
+        raise HTTPException(502, str(exc))
+    return {
+        "query": payload.query,
+        "source_family": "NASA Images",
+        "candidates": candidates,
+        "approval_policy": "Every candidate remains UNVERIFIED. A visible-frame review and an exact continuous shot interval are mandatory before rendering.",
+    }
 
 @app.get("/source-probes/{probe_id}/{frame_name}")
 def source_probe_frame(probe_id: str, frame_name: str, token: str):
