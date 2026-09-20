@@ -3,3 +3,4 @@ exact-visual-contract-7724cd3
 voice-sync-motion-v1
 no-cost-neural-tts-v1
 realtime-motion-v1
+natural-pacing-voice-v1

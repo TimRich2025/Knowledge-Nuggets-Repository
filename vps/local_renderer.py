@@ -7,6 +7,7 @@ from layout_lock import build_header, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H, HEAD
 class RenderError(RuntimeError): pass
 
 ENCODE_H = VIDEO_H + (VIDEO_H % 2)  # H.264 yuv420p requires even dimensions.
+DEFAULT_VISUAL_SPEED = 1.15
 
 def run(cmd, timeout=240):
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -116,19 +117,20 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 
 def scene_filter(scene: dict, scene_index: int = 1) -> str:
     layout=str(scene.get("layout_mode") or "CROP_FILL").upper()
+    try:
+        speed=float(scene.get("playback_speed") or DEFAULT_VISUAL_SPEED)
+    except (TypeError, ValueError) as exc:
+        raise RenderError("playback_speed must be numeric") from exc
+    if not 1.0 <= speed <= 1.35:
+        raise RenderError("playback_speed must be between 1.0 and 1.35")
     if layout == "CROP_FILL":
-        if scene_index % 2:
-            zoom="min(zoom+0.00038,1.045)"
-        else:
-            zoom="if(eq(on,0),1.045,max(zoom-0.00038,1.0))"
-        return (f"scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=increase:flags=lanczos,"
+        return (f"setpts=PTS/{speed:.5f},"
+                f"scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={CANVAS_W}:{ENCODE_H}:(iw-{CANVAS_W})/2:(ih-{ENCODE_H})/2,"
-                f"fps=30,"
-                f"zoompan=z='{zoom}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':"
-                f"d=1:s={CANVAS_W}x{ENCODE_H}:fps=30,setsar=1")
+                f"fps=30,setsar=1")
     if layout == "FIT_BLUR":
         bh=max(2,(ENCODE_H//4)//2*2)
-        return (f"split=2[bg][fg];[bg]scale=270:{bh}:force_original_aspect_ratio=increase,crop=270:{bh},"
+        return (f"setpts=PTS/{speed:.5f},split=2[bg][fg];[bg]scale=270:{bh}:force_original_aspect_ratio=increase,crop=270:{bh},"
                 f"gblur=sigma=8,scale={CANVAS_W}:{ENCODE_H},eq=brightness=-0.05:saturation=0.82,setsar=1,fps=30[bg2];"
                 f"[fg]scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1,fps=30[fg2];"
                 f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2:shortest=1")
@@ -141,7 +143,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     scenes=ingested["scenes"]
     audio=Path(ingested["audio"]["path"])
     audio_dur=probe_duration(audio)
-    if not 15 <= audio_dur <= 30.5: raise RenderError(f"narration outside 15-30s target: {audio_dur:.2f}s")
+    if not 8 <= audio_dur <= 30.5: raise RenderError(f"narration outside 8-30s target: {audio_dur:.2f}s")
     speech_intervals=[]
     previous_end=0.0
     for idx, scene in enumerate(scenes, 1):
@@ -168,7 +170,11 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     for idx,(s,dur) in enumerate(zip(scenes,durations),1):
         src=Path(s["local_path"])
         src_dur=probe_duration(src)
-        if src_dur + 0.12 < dur:
+        try:
+            speed=float(s.get("playback_speed") or DEFAULT_VISUAL_SPEED)
+        except (TypeError, ValueError) as exc:
+            raise RenderError(f"scene {idx}: playback_speed must be numeric") from exc
+        if src_dur / speed + 0.12 < dur:
             raise RenderError(f"scene {idx}: verified visual interval {src_dur:.2f}s shorter than required narration beat {dur:.2f}s")
         # `local_path` is exactly the source interval approved by visual review.
         # A renderer may shorten its tail for narration timing but must never seek

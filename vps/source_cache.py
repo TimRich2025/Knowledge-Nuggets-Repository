@@ -287,7 +287,10 @@ def synthesize_edge_scene_audio(
                 raise IngestError(f"scene {index}: neural TTS failed after retries: {' | '.join(errors)}")
             encoded.append(base64.b64encode(media.read_bytes()).decode("ascii"))
             cue_sets.append(_parse_edge_srt(subtitles))
-    audio,timings=ingest_scene_audio(encoded,max_durations,min_total_seconds=15.15)
+    # Keep the neural voice at its synthesized cadence.  Forcing a short script
+    # to a fixed minimum duration audibly stretches every word and makes the
+    # whole edit feel like slow motion.
+    audio,timings=ingest_scene_audio(encoded,max_durations)
     caption_sets=[]
     for scene,cues,timing in zip(scenes,cue_sets,timings):
         duration=float(timing["speech_end_seconds"])-float(timing["speech_start_seconds"])
