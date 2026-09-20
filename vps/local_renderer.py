@@ -123,6 +123,7 @@ def scene_filter(scene: dict, scene_index: int = 1) -> str:
             zoom="if(eq(on,0),1.045,max(zoom-0.00038,1.0))"
         return (f"scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={CANVAS_W}:{ENCODE_H}:(iw-{CANVAS_W})/2:(ih-{ENCODE_H})/2,"
+                f"fps=30,"
                 f"zoompan=z='{zoom}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':"
                 f"d=1:s={CANVAS_W}x{ENCODE_H}:fps=30,setsar=1")
     if layout == "FIT_BLUR":
