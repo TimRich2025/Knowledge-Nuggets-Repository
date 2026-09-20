@@ -5,3 +5,4 @@ no-cost-neural-tts-v1
 realtime-motion-v1
 natural-pacing-voice-v1
 gapless-adaptive-speed-v1
+accurate-source-seek-v2

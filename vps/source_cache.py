@@ -114,10 +114,12 @@ def ingest_video_segment(urls: list[str], shot_start: float, shot_end: float, po
     start=max(0.0,float(shot_start))
     end=float(shot_end)
     length=end-start
+    fast_seek=max(0.0,start-2.0)
+    accurate_seek=start-fast_seek
     if length < 1.5:
         raise IngestError("verified shot interval must be at least 1.5 seconds")
     for url in [u for u in urls if u]:
-        key=hashlib.sha256(f"{url}|{start:.3f}|{end:.3f}|1080".encode()).hexdigest()
+        key=hashlib.sha256(f"{url}|{start:.3f}|{end:.3f}|1080|accurate-seek-v2".encode()).hexdigest()
         dest=CACHE/f"{key}.mp4"; meta_path=CACHE/f"{key}.json"
         tmp=dest.with_name(dest.stem+".part.mp4")
         for attempt in range(1, 4):
@@ -132,7 +134,8 @@ def ingest_video_segment(urls: list[str], shot_start: float, shot_end: float, po
                          "-rw_timeout","30000000","-reconnect","1","-reconnect_streamed","1",
                          "-reconnect_on_network_error","1","-reconnect_on_http_error","403,429,5xx",
                          "-reconnect_delay_max","8",
-                         "-ss",f"{start:.3f}","-i",url,"-t",f"{length:.3f}",
+                         "-ss",f"{fast_seek:.3f}","-i",url,
+                         "-ss",f"{accurate_seek:.3f}","-t",f"{length:.3f}",
                          "-an","-vf",f"scale={scale}",
                          "-c:v","libx264","-threads","2","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",
                          "-movflags","+faststart",str(tmp)]
