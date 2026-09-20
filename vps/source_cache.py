@@ -221,7 +221,7 @@ def ingest_scene_audio(
         if len(max_durations) != len(normalized) or any(float(value) < 0.6 for value in max_durations):
             raise IngestError("one valid visual duration is required per audio segment")
         max_durations = [float(value) for value in max_durations]
-    fit_policy = json.dumps({"version": 1, "max": max_durations, "min_total": min_total_seconds}, sort_keys=True)
+    fit_policy = json.dumps({"version": 2, "max": max_durations, "min_total": min_total_seconds}, sort_keys=True)
     material = ("|".join(normalized) + "|" + fit_policy).encode()
     key = hashlib.sha256(material).hexdigest()
     dest = CACHE / f"{key}.wav"
@@ -254,8 +254,14 @@ def ingest_scene_audio(
                 source = tmp / f"part-{index:02d}.mp3"
                 source.write_bytes(raw)
                 wav = tmp / f"part-{index:02d}.wav"
+                # Google TTS MP3s contain small encoder/synthesis silence pads.
+                # Removing those pads makes each measured scene boundary the
+                # real first/last spoken sound, so captions no longer lead or
+                # trail the narration before the global tempo fit is applied.
+                trim = ("silenceremove=start_periods=1:start_duration=0.015:start_threshold=-50dB:"
+                        "stop_periods=1:stop_duration=0.10:stop_threshold=-50dB")
                 command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-                           "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
+                           "-vn", "-af", trim, "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
                 result = subprocess.run(command, capture_output=True, text=True, timeout=90)
                 if result.returncode or not wav.is_file():
                     raise IngestError(f"scene audio {index}: PCM decode failed: {result.stderr[-500:]}")

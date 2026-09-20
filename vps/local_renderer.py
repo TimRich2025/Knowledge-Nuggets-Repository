@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, subprocess
+import json, re, subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
 from layout_lock import build_header, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H, HEADER_H
@@ -26,6 +26,55 @@ def ass_time(sec: float) -> str:
 def ass_escape(s: str) -> str:
     return s.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
 
+def _spoken_tokens(text: str) -> list[tuple[str, float]]:
+    """Return ordered words with a small punctuation-aware speech weight.
+
+    Caption cards used to receive equal screen time.  That visibly drifted when
+    one card contained short words and the next contained longer words or a
+    sentence pause.  These weights keep caption boundaries tied to the words
+    Google TTS is actually pronouncing without inventing timestamps.
+    """
+    tokens=[]
+    for match in re.finditer(r"[A-Za-z0-9']+|[,;:.!?]", text):
+        token=match.group(0)
+        if token in ",;:":
+            if tokens: tokens[-1]=(tokens[-1][0],tokens[-1][1]+0.32)
+            continue
+        if token in ".!?":
+            if tokens: tokens[-1]=(tokens[-1][0],tokens[-1][1]+0.44)
+            continue
+        vowel_groups=len(re.findall(r"[aeiouy]+",token.lower()))
+        weight=max(1.0,0.72+0.62*vowel_groups+0.035*len(token))
+        tokens.append((token.lower(),weight))
+    return tokens
+
+def caption_intervals(scene: dict, duration: float) -> list[tuple[str, float, float]]:
+    beats=[str(x).strip().upper() for x in (scene.get("caption_beats") or []) if str(x).strip()]
+    if not beats:
+        beats=[str(scene.get("spoken_phrase") or "").strip().upper()]
+    spoken=_spoken_tokens(str(scene.get("spoken_phrase") or ""))
+    cursor=0
+    weights=[]
+    for beat in beats:
+        beat_words=[word for word,_ in _spoken_tokens(beat)]
+        weight=0.0
+        for word in beat_words:
+            while cursor < len(spoken) and spoken[cursor][0] != word:
+                cursor += 1
+            if cursor < len(spoken):
+                weight += spoken[cursor][1]
+                cursor += 1
+            else:
+                weight += max(1.0,len(word)/4.5)
+        weights.append(max(0.6,weight))
+    total=sum(weights) or float(len(beats))
+    intervals=[]; elapsed=0.0
+    for index,(beat,weight) in enumerate(zip(beats,weights)):
+        start=elapsed
+        elapsed=duration if index == len(beats)-1 else elapsed+duration*(weight/total)
+        intervals.append((beat,start,elapsed))
+    return intervals
+
 def build_ass(scenes: list[dict], durations: list[float], out: Path):
     header="""[Script Info]
 ScriptType: v4.00+
@@ -43,20 +92,24 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
     events=[]; t=0.0; cy=VIDEO_Y+VIDEO_H//2
     for scene,dur in zip(scenes,durations):
-        beats=[str(x).strip().upper() for x in (scene.get("caption_beats") or []) if str(x).strip()]
-        if not beats:
-            beats=[str(scene.get("spoken_phrase") or "").strip().upper()]
-        step=dur/max(1,len(beats))
-        for i,txt in enumerate(beats):
-            a=t+i*step; b=t+(i+1)*step
-            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{\\an5\\pos(540,{cy})}}{ass_escape(txt)}")
+        for txt,start,end in caption_intervals(scene,dur):
+            a=t+start; b=t+end
+            motion=r"\fscx94\fscy94\t(0,110,\fscx100\fscy100)\fad(35,20)"
+            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{\\an5\\pos(540,{cy}){motion}}}{ass_escape(txt)}")
         t+=dur
     out.write_text(header+"\n".join(events)+"\n",encoding="utf-8")
 
-def scene_filter(scene: dict) -> str:
+def scene_filter(scene: dict, scene_index: int = 1) -> str:
     layout=str(scene.get("layout_mode") or "CROP_FILL").upper()
     if layout == "CROP_FILL":
-        return f"scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=increase:flags=lanczos,crop={CANVAS_W}:{ENCODE_H}:(iw-{CANVAS_W})/2:(ih-{ENCODE_H})/2,setsar=1,fps=30"
+        if scene_index % 2:
+            zoom="min(zoom+0.00038,1.045)"
+        else:
+            zoom="if(eq(on,0),1.045,max(zoom-0.00038,1.0))"
+        return (f"scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=increase:flags=lanczos,"
+                f"crop={CANVAS_W}:{ENCODE_H}:(iw-{CANVAS_W})/2:(ih-{ENCODE_H})/2,"
+                f"zoompan=z='{zoom}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':"
+                f"d=1:s={CANVAS_W}x{ENCODE_H}:fps=30,setsar=1")
     if layout == "FIT_BLUR":
         bh=max(2,(ENCODE_H//4)//2*2)
         return (f"split=2[bg][fg];[bg]scale=270:{bh}:force_original_aspect_ratio=increase,crop=270:{bh},"
@@ -105,7 +158,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         # A renderer may shorten its tail for narration timing but must never seek
         # to another moment inside or outside that approved interval.
         start=0.0
-        seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(s)
+        seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(s,idx)
         if ";" in vf:
             fc=f"[0:v]{vf}[v]"
             cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
