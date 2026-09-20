@@ -177,7 +177,24 @@ def ingest_inline_audio(encoded: str) -> dict:
     meta_path.write_text(json.dumps(meta,indent=2),encoding="utf-8"); os.utime(dest,None)
     return meta
 
-def ingest_scene_audio(encoded_segments: list[dict | str]) -> tuple[dict, list[dict]]:
+def _atempo_chain(factor: float) -> str:
+    """Build a valid ffmpeg atempo chain for any positive speed factor."""
+    if factor <= 0:
+        raise IngestError("audio tempo factor must be positive")
+    parts=[]
+    while factor > 2.0:
+        parts.append(2.0); factor /= 2.0
+    while factor < 0.5:
+        parts.append(0.5); factor /= 0.5
+    parts.append(factor)
+    return ",".join(f"atempo={part:.8f}" for part in parts)
+
+
+def ingest_scene_audio(
+    encoded_segments: list[dict | str],
+    max_durations: list[float] | None = None,
+    min_total_seconds: float | None = None,
+) -> tuple[dict, list[dict]]:
     """Join independently synthesized beat audio and measure its real boundaries.
 
     Each visual beat is synthesized separately.  Decoding each part to PCM before
@@ -200,7 +217,12 @@ def ingest_scene_audio(encoded_segments: list[dict | str]) -> tuple[dict, list[d
         if not isinstance(item, str) or not item:
             raise IngestError(f"scene audio {index}: audio_base64 is required")
         normalized.append(item)
-    material = "|".join(normalized).encode()
+    if max_durations is not None:
+        if len(max_durations) != len(normalized) or any(float(value) < 0.6 for value in max_durations):
+            raise IngestError("one valid visual duration is required per audio segment")
+        max_durations = [float(value) for value in max_durations]
+    fit_policy = json.dumps({"version": 1, "max": max_durations, "min_total": min_total_seconds}, sort_keys=True)
+    material = ("|".join(normalized) + "|" + fit_policy).encode()
     key = hashlib.sha256(material).hexdigest()
     dest = CACHE / f"{key}.wav"
     meta_path = CACHE / f"{key}.json"
@@ -216,6 +238,8 @@ def ingest_scene_audio(encoded_segments: list[dict | str]) -> tuple[dict, list[d
             pass
         dest.unlink(missing_ok=True)
         meta_path.unlink(missing_ok=True)
+    elif dest.exists():
+        dest.unlink(missing_ok=True)
     if not dest.exists():
         with tempfile.TemporaryDirectory(prefix="scene-audio-", dir=CACHE) as tmp_name:
             tmp = Path(tmp_name)
@@ -236,15 +260,42 @@ def ingest_scene_audio(encoded_segments: list[dict | str]) -> tuple[dict, list[d
                 if result.returncode or not wav.is_file():
                     raise IngestError(f"scene audio {index}: PCM decode failed: {result.stderr[-500:]}")
                 wavs.append(wav)
-            cursor = 0.0
-            for index, wav in enumerate(wavs, 1):
-                duration = _audio_meta(ffprobe(wav), min_seconds=0.6, max_seconds=60.0)["duration"]
-                if duration < 0.6:
-                    raise IngestError(f"scene audio {index}: shorter than the minimum visual beat")
-                timings.append({"speech_start_seconds": round(cursor, 6), "speech_end_seconds": round(cursor + duration, 6)})
-                cursor += duration
+            durations=[_audio_meta(ffprobe(wav), min_seconds=0.6, max_seconds=60.0)["duration"] for wav in wavs]
+            targets=list(durations)
+            if max_durations is not None:
+                safe_max=[max(0.6, value - 0.10) for value in max_durations]
+                targets=[min(duration, maximum) for duration,maximum in zip(durations,safe_max)]
+                required=float(min_total_seconds or 0)
+                need=max(0.0, required-sum(targets))
+                spare=[maximum-target for maximum,target in zip(safe_max,targets)]
+                available=sum(spare)
+                if need > available + 0.03:
+                    raise IngestError(
+                        f"verified visual intervals cannot hold minimum narration: need {required:.2f}s, "
+                        f"capacity {sum(safe_max):.2f}s"
+                    )
+                if need > 0 and available > 0:
+                    targets=[target + need*(room/available) for target,room in zip(targets,spare)]
+            fitted=[]
+            cursor=0.0
+            for index,(wav,duration,target) in enumerate(zip(wavs,durations,targets),1):
+                output=wav
+                if abs(duration-target) > 0.025:
+                    output=tmp/f"part-{index:02d}-fit.wav"
+                    factor=duration/target
+                    command=["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(wav),
+                             "-af",_atempo_chain(factor),"-ac","1","-ar","48000","-c:a","pcm_s16le",str(output)]
+                    result=subprocess.run(command,capture_output=True,text=True,timeout=90)
+                    if result.returncode or not output.is_file():
+                        raise IngestError(f"scene audio {index}: timing normalization failed: {result.stderr[-500:]}")
+                actual=_audio_meta(ffprobe(output),min_seconds=0.6,max_seconds=60.0)["duration"]
+                if max_durations is not None and actual > max_durations[index-1] + 0.03:
+                    raise IngestError(f"scene audio {index}: normalized beat exceeds verified visual interval")
+                fitted.append(output)
+                timings.append({"speech_start_seconds":round(cursor,6),"speech_end_seconds":round(cursor+actual,6)})
+                cursor += actual
             listing = tmp / "concat.txt"
-            listing.write_text("\n".join(f"file '{wav.as_posix()}'" for wav in wavs) + "\n", encoding="utf-8")
+            listing.write_text("\n".join(f"file '{wav.as_posix()}'" for wav in fitted) + "\n", encoding="utf-8")
             joined = tmp / "joined.wav"
             command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
                        "-i", str(listing), "-c:a", "pcm_s16le", str(joined)]
@@ -261,10 +312,15 @@ def ingest_scene_audio(encoded_segments: list[dict | str]) -> tuple[dict, list[d
 
 def ingest_job(job: dict) -> dict:
     prune_cache()
+    raw_scenes=job.get("scenes") or []
     scene_audio = job.get("scene_audio_base64")
     speech_timings: list[dict] | None = None
     if scene_audio:
-        audio, speech_timings = ingest_scene_audio(scene_audio)
+        try:
+            max_durations=[float(scene["shot_end_seconds"])-float(scene["shot_start_seconds"]) for scene in raw_scenes]
+        except Exception as exc:
+            raise IngestError("verified visual durations are required before beat-audio timing") from exc
+        audio, speech_timings = ingest_scene_audio(scene_audio,max_durations,min_total_seconds=15.15)
     elif job.get("audio_base64"):
         audio=ingest_inline_audio(job["audio_base64"])
     else:
@@ -272,7 +328,7 @@ def ingest_job(job: dict) -> dict:
         if not audio_url: raise IngestError("audio_url or audio_base64 missing")
         audio=ingest([audio_url],"audio")
     scenes = []
-    for index, s in enumerate(job.get("scenes") or []):
+    for index, s in enumerate(raw_scenes):
         if speech_timings:
             s = {**s, **speech_timings[index]}
         try: validate_visual_contract(s, s.get("scene_number") or s.get("scene") or "?")
