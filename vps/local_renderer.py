@@ -124,13 +124,13 @@ def scene_filter(scene: dict, scene_index: int = 1) -> str:
     if not 1.0 <= speed <= 1.35:
         raise RenderError("playback_speed must be between 1.0 and 1.35")
     if layout == "CROP_FILL":
-        return (f"setpts=PTS/{speed:.5f},"
+        return (f"setpts=(PTS-STARTPTS)/{speed:.5f},"
                 f"scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={CANVAS_W}:{ENCODE_H}:(iw-{CANVAS_W})/2:(ih-{ENCODE_H})/2,"
                 f"fps=30,setsar=1")
     if layout == "FIT_BLUR":
         bh=max(2,(ENCODE_H//4)//2*2)
-        return (f"setpts=PTS/{speed:.5f},split=2[bg][fg];[bg]scale=270:{bh}:force_original_aspect_ratio=increase,crop=270:{bh},"
+        return (f"setpts=(PTS-STARTPTS)/{speed:.5f},split=2[bg][fg];[bg]scale=270:{bh}:force_original_aspect_ratio=increase,crop=270:{bh},"
                 f"gblur=sigma=8,scale={CANVAS_W}:{ENCODE_H},eq=brightness=-0.05:saturation=0.82,setsar=1,fps=30[bg2];"
                 f"[fg]scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1,fps=30[fg2];"
                 f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2:shortest=1")
@@ -171,16 +171,24 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         src=Path(s["local_path"])
         src_dur=probe_duration(src)
         try:
-            speed=float(s.get("playback_speed") or DEFAULT_VISUAL_SPEED)
+            requested_speed=float(s.get("playback_speed") or DEFAULT_VISUAL_SPEED)
+            verified_duration=float(s["shot_end_seconds"])-float(s["shot_start_seconds"])
         except (TypeError, ValueError) as exc:
             raise RenderError(f"scene {idx}: playback_speed must be numeric") from exc
-        if src_dur / speed + 0.12 < dur:
+        usable_duration=min(src_dur,verified_duration)
+        if usable_duration + 0.12 < dur:
             raise RenderError(f"scene {idx}: verified visual interval {src_dur:.2f}s shorter than required narration beat {dur:.2f}s")
+        # A requested speed-up is only applied when the approved source window
+        # contains enough real frames to cover the complete spoken beat.  This
+        # prevents timestamp holes or frozen tails between scenes.
+        safe_speed=max(1.0,(usable_duration-0.08)/dur)
+        effective_speed=min(requested_speed,safe_speed)
+        effective_scene={**s,"playback_speed":effective_speed}
         # `local_path` is exactly the source interval approved by visual review.
         # A renderer may shorten its tail for narration timing but must never seek
         # to another moment inside or outside that approved interval.
         start=0.0
-        seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(s,idx)
+        seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(effective_scene,idx)
         if ";" in vf:
             fc=f"[0:v]{vf}[v]"
             cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
