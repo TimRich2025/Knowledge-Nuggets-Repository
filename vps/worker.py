@@ -1,14 +1,25 @@
 from __future__ import annotations
-import json, tempfile, time, traceback
+import json, shutil, time, traceback
 from pathlib import Path
 from redis import Redis
 from .config import REDIS_URL, TMP
 from .pipeline import process, callback
 
+def clean_work_dir(path: Path) -> None:
+    """Remove render intermediates; finished previews live under OUTPUTS."""
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
 def main():
     if not REDIS_URL: raise SystemExit("REDIS_URL missing")
     r=Redis.from_url(REDIS_URL,decode_responses=True,socket_connect_timeout=10,socket_timeout=15)
-    r.ping(); print("KN worker ready; Redis queue connected",flush=True)
+    r.ping()
+    # A restart must recover space left by interrupted or failed renders.
+    for stale in TMP.iterdir():
+        clean_work_dir(stale)
+    print("KN worker ready; Redis queue connected",flush=True)
     while True:
         item=r.blpop("kn:queue",timeout=5)
         if not item: continue
@@ -24,5 +35,7 @@ def main():
             r.hset(key,mapping={"state":"FAILED","error":json.dumps(err),"updated_at":str(time.time())})
             try: callback(job,{"event":"render.failed","content_id":job.get("content_id"),"error":str(e)})
             except Exception: pass
+        finally:
+            clean_work_dir(work)
 
 if __name__=="__main__": main()
