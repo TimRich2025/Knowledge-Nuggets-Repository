@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, hashlib, json, os, subprocess, tempfile, time
+import base64, hashlib, html, json, os, re, subprocess, tempfile, time
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
@@ -190,6 +190,111 @@ def _atempo_chain(factor: float) -> str:
     return ",".join(f"atempo={part:.8f}" for part in parts)
 
 
+def _srt_seconds(value: str) -> float:
+    match=re.fullmatch(r"(\d+):(\d{2}):(\d{2})[,.](\d{3})",value.strip())
+    if not match:
+        raise IngestError(f"invalid TTS subtitle timestamp: {value}")
+    hours,minutes,seconds,millis=(int(part) for part in match.groups())
+    return hours*3600+minutes*60+seconds+millis/1000
+
+
+def _parse_edge_srt(path: Path) -> list[dict]:
+    cues=[]
+    for block in re.split(r"\n\s*\n",path.read_text(encoding="utf-8-sig").strip()):
+        lines=[line.strip() for line in block.splitlines() if line.strip()]
+        timing_index=next((i for i,line in enumerate(lines) if " --> " in line),None)
+        if timing_index is None or timing_index+1 >= len(lines):
+            continue
+        start_raw,end_raw=lines[timing_index].split(" --> ",1)
+        text=html.unescape(" ".join(lines[timing_index+1:])).strip()
+        if text:
+            cues.append({"text":text,"start":_srt_seconds(start_raw),"end":_srt_seconds(end_raw)})
+    if not cues:
+        raise IngestError("neural TTS returned no word-boundary subtitles")
+    return cues
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+",text.lower())
+
+
+def _caption_timings(scene: dict, cues: list[dict], duration: float) -> list[dict]:
+    words=[]
+    for cue in cues:
+        cue_words=_words(cue["text"])
+        if not cue_words:
+            continue
+        span=max(0.01,float(cue["end"])-float(cue["start"]))
+        for index,word in enumerate(cue_words):
+            words.append({"word":word,"start":float(cue["start"])+span*index/len(cue_words),
+                          "end":float(cue["start"])+span*(index+1)/len(cue_words)})
+    if not words:
+        return []
+    origin=words[0]["start"]
+    spoken_span=max(0.05,words[-1]["end"]-origin)
+    scale=duration/spoken_span
+    beats=[str(value).strip().upper() for value in (scene.get("caption_beats") or []) if str(value).strip()]
+    timings=[]; cursor=0
+    for beat in beats:
+        targets=_words(beat)
+        matched=[]
+        for target in targets:
+            while cursor < len(words) and words[cursor]["word"] != target:
+                cursor += 1
+            if cursor >= len(words):
+                return []
+            matched.append(words[cursor]); cursor += 1
+        if matched:
+            timings.append({"text":beat,"start_seconds":max(0.0,(matched[0]["start"]-origin)*scale),
+                            "end_seconds":min(duration,(matched[-1]["end"]-origin)*scale)})
+    for index in range(len(timings)-1):
+        timings[index]["end_seconds"]=timings[index+1]["start_seconds"]
+    if timings:
+        timings[0]["start_seconds"]=0.0
+        timings[-1]["end_seconds"]=duration
+    return timings
+
+
+def synthesize_edge_scene_audio(
+    scenes: list[dict],
+    voice: str,
+    rate: str,
+    max_durations: list[float],
+) -> tuple[dict,list[dict],list[list[dict]]]:
+    """Create no-key neural narration plus measured word-boundary subtitles."""
+    if not re.fullmatch(r"[A-Za-z]{2,3}-[A-Za-z]{2,3}-[A-Za-z0-9]+Neural",voice):
+        raise IngestError("invalid Edge neural voice")
+    if not re.fullmatch(r"[+-]\d{1,2}%",rate):
+        raise IngestError("invalid Edge neural speaking rate")
+    encoded=[]; cue_sets=[]
+    with tempfile.TemporaryDirectory(prefix="edge-tts-",dir=CACHE) as tmp_name:
+        tmp=Path(tmp_name)
+        for index,scene in enumerate(scenes,1):
+            phrase=str(scene.get("spoken_phrase") or "").strip()
+            if not phrase:
+                raise IngestError(f"scene {index}: spoken_phrase required for neural TTS")
+            media=tmp/f"scene-{index:02d}.mp3"; subtitles=tmp/f"scene-{index:02d}.srt"
+            command=["edge-tts","--voice",voice,f"--rate={rate}","--text",phrase,
+                     "--write-media",str(media),"--write-subtitles",str(subtitles)]
+            errors=[]
+            for attempt in range(1,4):
+                result=subprocess.run(command,capture_output=True,text=True,timeout=90)
+                if result.returncode == 0 and media.is_file() and subtitles.is_file():
+                    break
+                errors.append((result.stderr or result.stdout or "no output")[-500:])
+                time.sleep(2*attempt)
+            else:
+                raise IngestError(f"scene {index}: neural TTS failed after retries: {' | '.join(errors)}")
+            encoded.append(base64.b64encode(media.read_bytes()).decode("ascii"))
+            cue_sets.append(_parse_edge_srt(subtitles))
+    audio,timings=ingest_scene_audio(encoded,max_durations,min_total_seconds=15.15)
+    caption_sets=[]
+    for scene,cues,timing in zip(scenes,cue_sets,timings):
+        duration=float(timing["speech_end_seconds"])-float(timing["speech_start_seconds"])
+        caption_sets.append(_caption_timings(scene,cues,duration))
+    return audio,timings,caption_sets
+
+
 def ingest_scene_audio(
     encoded_segments: list[dict | str],
     max_durations: list[float] | None = None,
@@ -321,7 +426,19 @@ def ingest_job(job: dict) -> dict:
     raw_scenes=job.get("scenes") or []
     scene_audio = job.get("scene_audio_base64")
     speech_timings: list[dict] | None = None
-    if scene_audio:
+    caption_timings: list[list[dict]] | None = None
+    if str(job.get("tts_provider") or "").upper() == "EDGE":
+        try:
+            max_durations=[float(scene["shot_end_seconds"])-float(scene["shot_start_seconds"]) for scene in raw_scenes]
+        except Exception as exc:
+            raise IngestError("verified visual durations are required before neural TTS") from exc
+        audio,speech_timings,caption_timings=synthesize_edge_scene_audio(
+            raw_scenes,
+            str(job.get("tts_voice") or "en-US-ChristopherNeural"),
+            str(job.get("tts_rate") or "-3%"),
+            max_durations,
+        )
+    elif scene_audio:
         try:
             max_durations=[float(scene["shot_end_seconds"])-float(scene["shot_start_seconds"]) for scene in raw_scenes]
         except Exception as exc:
@@ -337,6 +454,8 @@ def ingest_job(job: dict) -> dict:
     for index, s in enumerate(raw_scenes):
         if speech_timings:
             s = {**s, **speech_timings[index]}
+        if caption_timings and caption_timings[index]:
+            s = {**s, "caption_timings": caption_timings[index]}
         try: validate_visual_contract(s, s.get("scene_number") or s.get("scene") or "?")
         except ValueError as e: raise IngestError(str(e))
         primary = s.get("source_url") or s.get("direct_download_url")

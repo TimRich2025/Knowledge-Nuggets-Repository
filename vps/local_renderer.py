@@ -92,7 +92,22 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
     events=[]; t=0.0; cy=VIDEO_Y+VIDEO_H//2
     for scene,dur in zip(scenes,durations):
-        for txt,start,end in caption_intervals(scene,dur):
+        measured=scene.get("caption_timings") or []
+        intervals=[]
+        for item in measured:
+            try:
+                txt=str(item["text"]).strip().upper()
+                start=max(0.0,min(dur,float(item["start_seconds"])))
+                end=min(dur,max(start+0.05,float(item["end_seconds"])))
+                if start >= dur or end <= start:
+                    raise ValueError("caption timing outside scene")
+            except (KeyError,TypeError,ValueError):
+                intervals=[]
+                break
+            if txt: intervals.append((txt,start,end))
+        if not intervals:
+            intervals=caption_intervals(scene,dur)
+        for txt,start,end in intervals:
             a=t+start; b=t+end
             motion=r"\fscx94\fscy94\t(0,110,\fscx100\fscy100)\fad(35,20)"
             events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{\\an5\\pos(540,{cy}){motion}}}{ass_escape(txt)}")
