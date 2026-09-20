@@ -115,7 +115,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         t+=dur
     out.write_text(header+"\n".join(events)+"\n",encoding="utf-8")
 
-def scene_filter(scene: dict, scene_index: int = 1) -> str:
+def scene_filter(scene: dict, scene_index: int = 1, duration: float | None = None) -> str:
     layout=str(scene.get("layout_mode") or "CROP_FILL").upper()
     try:
         speed=float(scene.get("playback_speed") or DEFAULT_VISUAL_SPEED)
@@ -123,17 +123,19 @@ def scene_filter(scene: dict, scene_index: int = 1) -> str:
         raise RenderError("playback_speed must be numeric") from exc
     if not 1.0 <= speed <= 1.35:
         raise RenderError("playback_speed must be between 1.0 and 1.35")
+    exact_tail=(f"fps=30,tpad=stop_mode=clone:stop_duration=0.5,"
+                f"trim=duration={float(duration):.6f},setpts=PTS-STARTPTS,setsar=1" if duration else "fps=30,setsar=1")
     if layout == "CROP_FILL":
         return (f"setpts=(PTS-STARTPTS)/{speed:.5f},"
                 f"scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={CANVAS_W}:{ENCODE_H}:(iw-{CANVAS_W})/2:(ih-{ENCODE_H})/2,"
-                f"fps=30,setsar=1")
+                f"{exact_tail}")
     if layout == "FIT_BLUR":
         bh=max(2,(ENCODE_H//4)//2*2)
         return (f"setpts=(PTS-STARTPTS)/{speed:.5f},split=2[bg][fg];[bg]scale=270:{bh}:force_original_aspect_ratio=increase,crop=270:{bh},"
                 f"gblur=sigma=8,scale={CANVAS_W}:{ENCODE_H},eq=brightness=-0.05:saturation=0.82,setsar=1,fps=30[bg2];"
                 f"[fg]scale={CANVAS_W}:{ENCODE_H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1,fps=30[fg2];"
-                f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2:shortest=1")
+                f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2:shortest=1,{exact_tail}")
     raise RenderError(f"unsupported layout_mode: {layout}")
 
 def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
@@ -188,12 +190,12 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         # A renderer may shorten its tail for narration timing but must never seek
         # to another moment inside or outside that approved interval.
         start=0.0
-        seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(effective_scene,idx)
+        seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(effective_scene,idx,dur)
         if ";" in vf:
             fc=f"[0:v]{vf}[v]"
-            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
+            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
         else:
-            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-t",f"{dur:.3f}","-an","-filter_threads","1","-vf",vf,"-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
+            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_threads","1","-vf",vf,"-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
         run(cmd, 300); segments.append(seg)
 
     concat=job_dir/"concat.txt"
