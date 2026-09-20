@@ -120,35 +120,45 @@ def ingest_video_segment(urls: list[str], shot_start: float, shot_end: float, po
         key=hashlib.sha256(f"{url}|{start:.3f}|{end:.3f}|1080".encode()).hexdigest()
         dest=CACHE/f"{key}.mp4"; meta_path=CACHE/f"{key}.json"
         tmp=dest.with_name(dest.stem+".part.mp4")
-        try:
-            prune_cache()
-            if not dest.exists():
-                tmp.unlink(missing_ok=True)
-                scale="1080:-2" if portrait else "-2:1080"
-                cmd=["ffmpeg","-hide_banner","-loglevel","error","-y",
-                     "-user_agent","KnowledgeNuggetsSourceIngest/3.0",
-                     "-ss",f"{start:.3f}","-i",url,"-t",f"{length:.3f}",
-                     "-an","-vf",f"scale={scale}",
-                     "-c:v","libx264","-threads","2","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",
-                     "-movflags","+faststart",str(tmp)]
-                p=subprocess.run(cmd,capture_output=True,text=True,timeout=180)
-                if p.returncode:
-                    err=p.stderr[-1200:]
-                    if "429" in err or "Too Many Requests" in err:
-                        raise IngestError(f"origin rate limited source: {url}")
-                    raise IngestError(f"verified-shot ingest failed: {err}")
-                if not tmp.exists() or tmp.stat().st_size < 32_000:
-                    raise IngestError("verified shot is implausibly small")
-                os.replace(tmp,dest)
-            probe=ffprobe(dest); media=_video_meta(probe)
-            meta={"key":key,"url":url,"kind":"verified_shot","path":str(dest),"bytes":dest.stat().st_size,
-                  "shot_start_seconds":start,"shot_end_seconds":end,**media}
-            meta_path.write_text(json.dumps(meta,indent=2),encoding="utf-8"); os.utime(dest,None)
-            return meta
-        except Exception as e:
-            errors.append(f"{url}: {e}")
-            dest.unlink(missing_ok=True); meta_path.unlink(missing_ok=True); tmp.unlink(missing_ok=True)
-            time.sleep(1)
+        for attempt in range(1, 4):
+            try:
+                prune_cache()
+                if not dest.exists():
+                    tmp.unlink(missing_ok=True)
+                    scale="1080:-2" if portrait else "-2:1080"
+                    cmd=["ffmpeg","-hide_banner","-loglevel","error","-y",
+                         "-user_agent","KnowledgeNuggetsSourceIngest/4.0",
+                         "-referer","https://images.nasa.gov/",
+                         "-rw_timeout","30000000","-reconnect","1","-reconnect_streamed","1",
+                         "-reconnect_on_network_error","1","-reconnect_on_http_error","403,429,5xx",
+                         "-reconnect_delay_max","8",
+                         "-ss",f"{start:.3f}","-i",url,"-t",f"{length:.3f}",
+                         "-an","-vf",f"scale={scale}",
+                         "-c:v","libx264","-threads","2","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",
+                         "-movflags","+faststart",str(tmp)]
+                    p=subprocess.run(cmd,capture_output=True,text=True,timeout=210)
+                    if p.returncode:
+                        raise IngestError(f"verified-shot ingest failed: {p.stderr[-1200:]}")
+                    if not tmp.exists() or tmp.stat().st_size < 32_000:
+                        raise IngestError("verified shot is implausibly small")
+                    os.replace(tmp,dest)
+                probe=ffprobe(dest); media=_video_meta(probe)
+                meta={"key":key,"url":url,"kind":"verified_shot","path":str(dest),"bytes":dest.stat().st_size,
+                      "shot_start_seconds":start,"shot_end_seconds":end,**media}
+                meta_path.write_text(json.dumps(meta,indent=2),encoding="utf-8"); os.utime(dest,None)
+                return meta
+            except Exception as e:
+                detail=str(e)
+                dest.unlink(missing_ok=True); meta_path.unlink(missing_ok=True); tmp.unlink(missing_ok=True)
+                transient=any(marker in detail for marker in (
+                    "403", "429", "5xx", "timed out", "Timeout", "temporarily unavailable",
+                    "Connection reset", "Network is unreachable", "Server returned 5"
+                ))
+                if transient and attempt < 3:
+                    time.sleep(3 * attempt)
+                    continue
+                errors.append(f"{url} (attempt {attempt}/3): {detail}")
+                break
     raise IngestError("all approved exact-shot sources failed ingest: "+" | ".join(errors))
 
 def ingest_inline_audio(encoded: str) -> dict:
