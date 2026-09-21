@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, hashlib, html, json, os, re, subprocess, tempfile, time
+import base64, hashlib, html, json, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
@@ -276,7 +276,7 @@ def synthesize_edge_scene_audio(
             if not phrase:
                 raise IngestError(f"scene {index}: spoken_phrase required for neural TTS")
             media=tmp/f"scene-{index:02d}.mp3"; subtitles=tmp/f"scene-{index:02d}.srt"
-            command=["edge-tts","--voice",voice,f"--rate={rate}","--text",phrase,
+            command=[sys.executable,"-m","vps.edge_word_tts","--voice",voice,"--rate",rate,"--text",phrase,
                      "--write-media",str(media),"--write-subtitles",str(subtitles)]
             errors=[]
             for attempt in range(1,4):
@@ -288,7 +288,10 @@ def synthesize_edge_scene_audio(
             else:
                 raise IngestError(f"scene {index}: neural TTS failed after retries: {' | '.join(errors)}")
             encoded.append(base64.b64encode(media.read_bytes()).decode("ascii"))
-            cue_sets.append(_parse_edge_srt(subtitles))
+            cues=_parse_edge_srt(subtitles)
+            if any(len(_words(cue["text"])) != 1 for cue in cues):
+                raise IngestError(f"scene {index}: word-level TTS markers required")
+            cue_sets.append(cues)
     # Keep the neural voice at its synthesized cadence.  Forcing a short script
     # to a fixed minimum duration audibly stretches every word and makes the
     # whole edit feel like slow motion.

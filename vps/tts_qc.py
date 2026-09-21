@@ -30,12 +30,17 @@ def main() -> None:
     audio,timings,captions=synthesize_edge_scene_audio(
         SCENES,"en-US-AndrewMultilingualNeural","+8%",[3.5,2.1,5.0,5.5,4.0],
     )
+    for index,words in enumerate(captions,1):
+        gaps=[b["start_seconds"]-a["start_seconds"] for a,b in zip(words,words[1:])]
+        if len(words)>=7 and max(gaps)-min(gaps)<0.03:
+            raise RuntimeError(f"scene {index}: word starts look artificially uniform")
     output=Path("tts-qc-output")
     output.mkdir(exist_ok=True)
     shutil.copyfile(audio["path"],output/"narration.wav")
     (output/"timings.json").write_text(json.dumps({
         "scenes":SCENES,"speech_timings":timings,"caption_timings":captions,
         "duration_seconds":audio["duration"],"voice":"en-US-AndrewMultilingualNeural",
+        "timing_source":"EDGE_WORD_BOUNDARY",
     },indent=2),encoding="utf-8")
     print(f"Verified {sum(len(x) for x in captions)} spoken words across {len(timings)} scenes; "
           f"narration {audio['duration']:.2f}s")

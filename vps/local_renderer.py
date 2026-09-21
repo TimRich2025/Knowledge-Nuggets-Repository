@@ -114,9 +114,11 @@ def typewriter_text(text: str, words: list[tuple[str, float, float]], phrase_sta
         if index:
             result.append("\u00a0\u00a0")
         word_start=round(1000*(start-phrase_start))
-        reveal_ms=min(240,max(35,round(1000*(end-start)*0.65)))
+        # Keep typing at one steady cadence, shortening a word only if its
+        # recorded speech interval cannot hold all its letters.
+        letter_ms=min(30,max(1,round(850*(end-start)/max(1,len(word)-1))))
         for letter,char in enumerate(word):
-            at=max(0,word_start+round(reveal_ms*letter/max(1,len(word)-1)))
+            at=max(0,word_start+letter_ms*letter)
             result.append(r"{\alpha&HFF&\t("+f"{at},{at+1}"+r",\alpha&H00&)}"+ass_escape(char))
     return "".join(result)
 
@@ -130,7 +132,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Main,Noto Sans,86,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,2,5,90,90,0,1
+Style: Main,Noto Sans,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,1,5,90,90,0,1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
