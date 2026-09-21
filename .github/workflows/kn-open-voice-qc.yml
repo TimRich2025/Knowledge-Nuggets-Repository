@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install kokoro-onnx==0.4.9 soundfile==0.13.1 numpy
+      - run: python -m pip install kokoro-onnx==0.6.1 soundfile==0.13.1 numpy
       - run: python .github/scripts/kn_open_voice.py
       - uses: actions/upload-artifact@v4
         with:
