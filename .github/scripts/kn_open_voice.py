@@ -43,7 +43,7 @@ def main() -> None:
         result["voices"][voice] = {
             "sample_rate": sample_rate, "format": "PCM_16_WAV",
             "duration_seconds": len(samples) / sample_rate,
-            "peak_dbfs": round(20 * np.log10(np.max(np.abs(samples))), 2),
+            "peak_dbfs": round(float(20 * np.log10(np.max(np.abs(samples)))), 2),
         }
     (OUTPUT / "result.json").write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
