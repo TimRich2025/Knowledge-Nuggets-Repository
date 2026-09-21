@@ -8,3 +8,4 @@ gapless-adaptive-speed-v1
 accurate-source-seek-v2
 frame-exact-segments-v1
 one-word-captions-stereo-audio-v1
+typewriter-phrase-captions-v1

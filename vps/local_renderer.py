@@ -76,20 +76,50 @@ def caption_intervals(scene: dict, duration: float) -> list[tuple[str, float, fl
         intervals.append((beat,start,elapsed))
     return intervals
 
-def one_word_intervals(intervals: list[tuple[str, float, float]]) -> list[tuple[str, float, float]]:
-    """Expand caption phrases into consecutive, individually timed words."""
-    words_out=[]
+def phrase_intervals(scene: dict, intervals: list[tuple[str, float, float]], duration: float) -> list[tuple[str, float, float]]:
+    """Keep short caption phrases while anchoring their boundaries to measured words."""
+    beats=[str(x).strip().upper() for x in (scene.get("caption_beats") or []) if str(x).strip()]
+    if not beats:
+        return intervals
+    # Local manifests can already contain the time span of each caption phrase.
+    if len(intervals)==len(beats) and all(
+        [word for word,_ in _spoken_tokens(text)]==[word for word,_ in _spoken_tokens(beat)]
+        for (text,_,_),beat in zip(intervals,beats)
+    ):
+        return intervals
+    words=[]
     for phrase,start,end in intervals:
         tokens=_spoken_tokens(phrase)
-        if not tokens or end <= start:
-            continue
-        weight=sum(value for _,value in tokens)
+        total=sum(weight for _,weight in tokens)
         cursor=start
-        for index,(word,value) in enumerate(tokens):
-            next_time=end if index == len(tokens)-1 else cursor+(end-start)*value/weight
-            words_out.append((word.upper(),cursor,next_time))
-            cursor=next_time
-    return words_out
+        for index,(word,weight) in enumerate(tokens):
+            next_time=end if index==len(tokens)-1 else cursor+(end-start)*weight/total
+            words.append((word,cursor,next_time)); cursor=next_time
+    grouped=[]; cursor=0
+    for beat in beats:
+        targets=[word for word,_ in _spoken_tokens(beat)]
+        matched=words[cursor:cursor+len(targets)]
+        if len(matched)!=len(targets) or [word for word,_,_ in matched]!=targets:
+            return caption_intervals(scene,duration)
+        grouped.append((beat,matched[0][1],matched[-1][2]))
+        cursor+=len(targets)
+    if cursor!=len(words):
+        return caption_intervals(scene,duration)
+    return grouped
+
+def typewriter_text(text: str, seconds: float) -> str:
+    """Reveal letters individually while reserving the phrase's full width."""
+    reveal_ms=int(1000*min(0.55,max(0.18,seconds*0.58)))
+    visible=[index for index,char in enumerate(text) if not char.isspace()]
+    result=[]; letter=0
+    for char in text:
+        if char.isspace():
+            result.append("\u00a0")
+            continue
+        start=round(reveal_ms*letter/max(1,len(visible)-1))
+        result.append(r"{\alpha&HFF&\t("+f"{start},{start+1}"+r",\alpha&H00&)}"+ass_escape(char))
+        letter+=1
+    return "".join(result)
 
 def build_ass(scenes: list[dict], durations: list[float], out: Path):
     header="""[Script Info]
@@ -101,7 +131,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Main,Noto Sans,94,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,2,5,90,90,0,1
+Style: Main,Noto Sans,86,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,2,5,90,90,0,1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -123,10 +153,10 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             if txt: intervals.append((txt,start,end))
         if not intervals:
             intervals=caption_intervals(scene,dur)
-        for txt,start,end in one_word_intervals(intervals):
+        for txt,start,end in phrase_intervals(scene,intervals,dur):
             a=t+start; b=t+end
-            motion=rf"\an5\move(540,{cy+24},540,{cy},0,70)\fad(20,10)"
-            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{{motion}}}{ass_escape(txt)}")
+            placement=rf"\an5\pos(540,{cy})"
+            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{{placement}}}{typewriter_text(txt,end-start)}")
         t+=dur
     out.write_text(header+"\n".join(events)+"\n",encoding="utf-8")
 
@@ -183,7 +213,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
 
     header=job_dir/"header.png"; build_header(q,header)
     ass=job_dir/"captions.ass"; build_ass(scenes,durations,ass)
-    segments=[]
+    segments=[]; segment_commands=[]
     for idx,(s,dur) in enumerate(zip(scenes,durations),1):
         src=Path(s["local_path"])
         src_dur=probe_duration(src)
@@ -215,15 +245,30 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         actual_duration=probe_duration(seg)
         if abs(actual_duration-dur) > 0.08:
             raise RenderError(f"scene {idx}: encoded segment has {actual_duration:.3f}s instead of {dur:.3f}s")
-        segments.append(seg)
+        segments.append(seg); segment_commands.append((cmd,dur))
 
     concat=job_dir/"concat.txt"
     concat.write_text("\n".join(f"file '{p.resolve().as_posix()}'" for p in segments)+"\n",encoding="utf-8")
     lower=job_dir/"lower.mp4"
-    run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",str(concat),"-c","copy",str(lower)],120)
-    lower_duration=probe_duration(lower)
-    if abs(lower_duration-sum(durations)) > 0.12:
-        raise RenderError(f"concatenated visual track lost scenes: {lower_duration:.3f}s vs {sum(durations):.3f}s")
+    # A damaged intermediate can make FFmpeg concat exit successfully after
+    # only the first scene. Verify the full track and retry damaged segments.
+    for attempt in range(3):
+        for seg,(cmd,dur) in zip(segments,segment_commands):
+            try:
+                valid=seg.stat().st_size>=32_000 and abs(probe_duration(seg)-dur)<=0.08
+            except (OSError,ValueError,RenderError):
+                valid=False
+            if not valid:
+                run(cmd,300)
+        try:
+            run(["ffmpeg","-hide_banner","-loglevel","error","-xerror","-y","-f","concat","-safe","0","-i",str(concat),"-c","copy",str(lower)],120)
+            lower_duration=probe_duration(lower)
+            if abs(lower_duration-sum(durations))<=0.12:
+                break
+        except RenderError:
+            pass
+    else:
+        raise RenderError("concatenated visual track lost scenes after three attempts")
     out=job_dir/"preview.mp4"
     fc=(f"[0:v]crop={CANVAS_W}:{VIDEO_H}:0:0[lower];[lower]pad={CANVAS_W}:{CANVAS_H}:0:{VIDEO_Y}:color=black[base];"
         f"[base][1:v]overlay=0:0:eof_action=repeat:repeatlast=1[locked];[locked]ass={ass.as_posix()}[v]")
