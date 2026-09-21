@@ -76,21 +76,17 @@ def caption_intervals(scene: dict, duration: float) -> list[tuple[str, float, fl
         intervals.append((beat,start,elapsed))
     return intervals
 
-def phrase_intervals(scene: dict, intervals: list[tuple[str, float, float]], duration: float) -> list[tuple[str, float, float]]:
-    """Keep short caption phrases while anchoring their boundaries to measured words."""
+def phrase_intervals(scene: dict, intervals: list[tuple[str, float, float]], duration: float) -> list[tuple[str, float, float, list[tuple[str, float, float]]]]:
+    """Keep caption phrases and retain the spoken time of every word."""
     beats=[str(x).strip().upper() for x in (scene.get("caption_beats") or []) if str(x).strip()]
     if not beats:
-        return intervals
-    # Local manifests can already contain the time span of each caption phrase.
-    if len(intervals)==len(beats) and all(
-        [word for word,_ in _spoken_tokens(text)]==[word for word,_ in _spoken_tokens(beat)]
-        for (text,_,_),beat in zip(intervals,beats)
-    ):
-        return intervals
+        beats=[str(scene.get("spoken_phrase") or "").strip().upper()]
+    if [word for beat in beats for word,_ in _spoken_tokens(beat)] != [word for word,_ in _spoken_tokens(str(scene.get("spoken_phrase") or ""))]:
+        raise RenderError("caption text differs from the spoken script")
     words=[]
     for phrase,start,end in intervals:
         tokens=_spoken_tokens(phrase)
-        total=sum(weight for _,weight in tokens)
+        total=sum(weight for _,weight in tokens) or 1.0
         cursor=start
         for index,(word,weight) in enumerate(tokens):
             next_time=end if index==len(tokens)-1 else cursor+(end-start)*weight/total
@@ -100,26 +96,28 @@ def phrase_intervals(scene: dict, intervals: list[tuple[str, float, float]], dur
         targets=[word for word,_ in _spoken_tokens(beat)]
         matched=words[cursor:cursor+len(targets)]
         if len(matched)!=len(targets) or [word for word,_,_ in matched]!=targets:
-            return caption_intervals(scene,duration)
-        grouped.append((beat,matched[0][1],matched[-1][2]))
+            raise RenderError("caption timing words differ from the spoken script")
+        grouped.append((beat,matched[0][1],matched[-1][2],matched))
         cursor+=len(targets)
     if cursor!=len(words):
-        return caption_intervals(scene,duration)
+        raise RenderError("caption timing contains words absent from the spoken script")
     return grouped
 
-def typewriter_text(text: str, seconds: float) -> str:
-    """Reveal letters individually while reserving the phrase's full width."""
-    reveal_ms=int(1000*min(0.55,max(0.18,seconds*0.58)))
-    visible=[index for index,char in enumerate(text) if not char.isspace()]
-    result=[]; letter=0
-    for char in text:
-        if char.isspace():
-            # A wider fixed gap stays legible over bright footage behind text.
+def typewriter_text(text: str, words: list[tuple[str, float, float]], phrase_start: float) -> str:
+    """Reveal each word only while that exact word is being spoken."""
+    result=[]
+    for index,match in enumerate(re.finditer(r"[A-Za-z0-9']+",text)):
+        word=match.group()
+        measured,start,end=words[index]
+        if word.lower()!=measured:
+            raise RenderError("typed caption does not match word timing")
+        if index:
             result.append("\u00a0\u00a0")
-            continue
-        start=round(reveal_ms*letter/max(1,len(visible)-1))
-        result.append(r"{\alpha&HFF&\t("+f"{start},{start+1}"+r",\alpha&H00&)}"+ass_escape(char))
-        letter+=1
+        word_start=round(1000*(start-phrase_start))
+        reveal_ms=min(240,max(35,round(1000*(end-start)*0.65)))
+        for letter,char in enumerate(word):
+            at=max(0,word_start+round(reveal_ms*letter/max(1,len(word)-1)))
+            result.append(r"{\alpha&HFF&\t("+f"{at},{at+1}"+r",\alpha&H00&)}"+ass_escape(char))
     return "".join(result)
 
 def build_ass(scenes: list[dict], durations: list[float], out: Path):
@@ -154,10 +152,10 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             if txt: intervals.append((txt,start,end))
         if not intervals:
             intervals=caption_intervals(scene,dur)
-        for txt,start,end in phrase_intervals(scene,intervals,dur):
+        for txt,start,end,words in phrase_intervals(scene,intervals,dur):
             a=t+start; b=t+end
             placement=rf"\an5\pos(540,{cy})"
-            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{{placement}}}{typewriter_text(txt,end-start)}")
+            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{{placement}}}{typewriter_text(txt,words,start)}")
         t+=dur
     out.write_text(header+"\n".join(events)+"\n",encoding="utf-8")
 

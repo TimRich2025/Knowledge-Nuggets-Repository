@@ -1,0 +1,36 @@
+name: KN Narration QC
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - vps/source_cache.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-speech:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      KN_DATA_DIR: ${{ runner.temp }}/kn-narration-qc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare speech runtime
+        run: |
+          command -v ffmpeg
+          python -m pip install -r vps/requirements.txt
+      - name: Synthesize and verify all spoken words
+        run: python -m vps.tts_qc
+      - name: Save narration for preview review
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kn-rocket-narration-qc
+          path: tts-qc-output/
+          retention-days: 1

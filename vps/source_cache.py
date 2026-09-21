@@ -294,9 +294,17 @@ def synthesize_edge_scene_audio(
     # whole edit feel like slow motion.
     audio,timings=ingest_scene_audio(encoded,max_durations)
     caption_sets=[]
-    for scene,cues,timing in zip(scenes,cue_sets,timings):
+    for index,(scene,cues,timing) in enumerate(zip(scenes,cue_sets,timings),1):
         duration=float(timing["speech_end_seconds"])-float(timing["speech_start_seconds"])
-        caption_sets.append(_caption_timings(scene,cues,duration))
+        spoken=_words(str(scene.get("spoken_phrase") or ""))
+        if [word for cue in cues for word in _words(cue["text"])] != spoken:
+            raise IngestError(f"scene {index}: synthesized words differ from the spoken script")
+        if len(spoken)*60/duration > 240:
+            raise IngestError(f"scene {index}: narration is too short for its spoken words")
+        captions=_caption_timings(scene,cues,duration)
+        if not captions or _words(" ".join(item["text"] for item in captions)) != spoken:
+            raise IngestError(f"scene {index}: TTS word timings do not cover the complete narration")
+        caption_sets.append(captions)
     return audio,timings,caption_sets
 
 
@@ -331,7 +339,7 @@ def ingest_scene_audio(
         if len(max_durations) != len(normalized) or any(float(value) < 0.6 for value in max_durations):
             raise IngestError("one valid visual duration is required per audio segment")
         max_durations = [float(value) for value in max_durations]
-    fit_policy = json.dumps({"version": 2, "max": max_durations, "min_total": min_total_seconds}, sort_keys=True)
+    fit_policy = json.dumps({"version": 3, "max": max_durations, "min_total": min_total_seconds}, sort_keys=True)
     material = ("|".join(normalized) + "|" + fit_policy).encode()
     key = hashlib.sha256(material).hexdigest()
     dest = CACHE / f"{key}.wav"
@@ -368,8 +376,12 @@ def ingest_scene_audio(
                 # Removing those pads makes each measured scene boundary the
                 # real first/last spoken sound, so captions no longer lead or
                 # trail the narration before the global tempo fit is applied.
-                trim = ("silenceremove=start_periods=1:start_duration=0.015:start_threshold=-50dB:"
-                        "stop_periods=1:stop_duration=0.10:stop_threshold=-50dB")
+                # Trimming from the front and then the reversed end preserves
+                # real pauses inside a sentence. A stop_periods filter in the
+                # forward direction used to discard every word after a pause.
+                trim = ("silenceremove=start_periods=1:start_duration=0.015:start_threshold=-50dB,"
+                        "areverse,silenceremove=start_periods=1:start_duration=0.10:"
+                        "start_threshold=-50dB,areverse")
                 command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
                            "-vn", "-af", trim, "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
                 result = subprocess.run(command, capture_output=True, text=True, timeout=90)

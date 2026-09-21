@@ -10,3 +10,4 @@ frame-exact-segments-v1
 one-word-captions-stereo-audio-v1
 typewriter-phrase-captions-v1
 typewriter-word-spacing-v1
+preserve-pause-verify-spoken-timing-v1
