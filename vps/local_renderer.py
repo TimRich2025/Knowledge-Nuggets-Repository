@@ -114,7 +114,8 @@ def typewriter_text(text: str, seconds: float) -> str:
     result=[]; letter=0
     for char in text:
         if char.isspace():
-            result.append("\u00a0")
+            # A wider fixed gap stays legible over bright footage behind text.
+            result.append("\u00a0\u00a0")
             continue
         start=round(reveal_ms*letter/max(1,len(visible)-1))
         result.append(r"{\alpha&HFF&\t("+f"{start},{start+1}"+r",\alpha&H00&)}"+ass_escape(char))
