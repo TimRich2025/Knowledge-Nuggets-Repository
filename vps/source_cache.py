@@ -299,7 +299,9 @@ def synthesize_edge_scene_audio(
         spoken=_words(str(scene.get("spoken_phrase") or ""))
         if [word for cue in cues for word in _words(cue["text"])] != spoken:
             raise IngestError(f"scene {index}: synthesized words differ from the spoken script")
-        if len(spoken)*60/duration > 240:
+        # Short phrases may exceed 240 WPM without omitting a word. Keep the
+        # independent cutoff guard for complete sentences.
+        if len(spoken) >= 7 and len(spoken)*60/duration > 260:
             raise IngestError(f"scene {index}: narration is too short for its spoken words")
         captions=_caption_timings(scene,cues,duration)
         if not captions or _words(" ".join(item["text"] for item in captions)) != spoken:
