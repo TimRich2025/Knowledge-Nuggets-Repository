@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - vps/source_cache.py
+      - .github/workflows/kn-narration-qc.yml
   workflow_dispatch:
 
 permissions:
@@ -14,8 +15,6 @@ jobs:
   verify-speech:
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    env:
-      KN_DATA_DIR: ${{ runner.temp }}/kn-narration-qc
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
