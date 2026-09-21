@@ -116,7 +116,7 @@ def typewriter_text(text: str, words: list[tuple[str, float, float]], phrase_sta
         word_start=round(1000*(start-phrase_start))
         # Every letter uses the same step. Natural pauses between spoken words
         # remain pauses; they must not accelerate or stretch the typing itself.
-        letter_ms=30
+        letter_ms=26
         for letter,char in enumerate(word):
             at=max(0,word_start+letter_ms*letter)
             result.append(r"{\alpha&HFF&\t("+f"{at},{at+1}"+r",\alpha&H00&)}"+ass_escape(char))
