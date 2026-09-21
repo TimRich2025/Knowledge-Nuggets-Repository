@@ -114,9 +114,9 @@ def typewriter_text(text: str, words: list[tuple[str, float, float]], phrase_sta
         if index:
             result.append("\u00a0\u00a0")
         word_start=round(1000*(start-phrase_start))
-        # Keep typing at one steady cadence, shortening a word only if its
-        # recorded speech interval cannot hold all its letters.
-        letter_ms=min(30,max(1,round(850*(end-start)/max(1,len(word)-1))))
+        # Every letter uses the same step. Natural pauses between spoken words
+        # remain pauses; they must not accelerate or stretch the typing itself.
+        letter_ms=30
         for letter,char in enumerate(word):
             at=max(0,word_start+letter_ms*letter)
             result.append(r"{\alpha&HFF&\t("+f"{at},{at+1}"+r",\alpha&H00&)}"+ass_escape(char))
@@ -273,9 +273,15 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     out=job_dir/"preview.mp4"
     fc=(f"[0:v]crop={CANVAS_W}:{VIDEO_H}:0:0[lower];[lower]pad={CANVAS_W}:{CANVAS_H}:0:{VIDEO_Y}:color=black[base];"
         f"[base][1:v]overlay=0:0:eof_action=repeat:repeatlast=1[locked];[locked]ass={ass.as_posix()}[v]")
+    studio_voice=("highpass=f=75,"
+                  "equalizer=f=140:t=q:w=0.8:g=2.5,"
+                  "equalizer=f=430:t=q:w=1:g=-1.5,"
+                  "equalizer=f=3000:t=q:w=0.9:g=2.0,"
+                  "acompressor=threshold=0.10:ratio=2.2:attack=18:release=160:makeup=1.35:mix=0.85,"
+                  "loudnorm=I=-15:TP=-1.5:LRA=8,volume=2dB,alimiter=limit=0.89")
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(lower),"-loop","1","-i",str(header),"-i",str(audio),
          "-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-map","2:a:0","-t",f"{audio_dur:.3f}","-c:v","libx264","-threads","2","-preset","veryfast","-crf","16",
-         "-pix_fmt","yuv420p","-af","loudnorm=I=-16:TP=-1.5:LRA=11,volume=3dB,alimiter=limit=0.85","-ac","2","-ar","48000",
+         "-pix_fmt","yuv420p","-af",studio_voice,"-ac","2","-ar","48000",
          "-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)],360)
 
     frame=job_dir/"qc_frame.png"
