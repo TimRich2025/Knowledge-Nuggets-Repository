@@ -76,6 +76,21 @@ def caption_intervals(scene: dict, duration: float) -> list[tuple[str, float, fl
         intervals.append((beat,start,elapsed))
     return intervals
 
+def one_word_intervals(intervals: list[tuple[str, float, float]]) -> list[tuple[str, float, float]]:
+    """Expand caption phrases into consecutive, individually timed words."""
+    words_out=[]
+    for phrase,start,end in intervals:
+        tokens=_spoken_tokens(phrase)
+        if not tokens or end <= start:
+            continue
+        weight=sum(value for _,value in tokens)
+        cursor=start
+        for index,(word,value) in enumerate(tokens):
+            next_time=end if index == len(tokens)-1 else cursor+(end-start)*value/weight
+            words_out.append((word.upper(),cursor,next_time))
+            cursor=next_time
+    return words_out
+
 def build_ass(scenes: list[dict], durations: list[float], out: Path):
     header="""[Script Info]
 ScriptType: v4.00+
@@ -86,7 +101,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Main,Noto Sans,68,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,1,5,90,90,0,1
+Style: Main,Noto Sans,94,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,6,2,5,90,90,0,1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -108,10 +123,10 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             if txt: intervals.append((txt,start,end))
         if not intervals:
             intervals=caption_intervals(scene,dur)
-        for txt,start,end in intervals:
+        for txt,start,end in one_word_intervals(intervals):
             a=t+start; b=t+end
-            motion=r"\fscx94\fscy94\t(0,110,\fscx100\fscy100)\fad(35,20)"
-            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{\\an5\\pos(540,{cy}){motion}}}{ass_escape(txt)}")
+            motion=rf"\an5\move(540,{cy+24},540,{cy},0,70)\fad(20,10)"
+            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{{motion}}}{ass_escape(txt)}")
         t+=dur
     out.write_text(header+"\n".join(events)+"\n",encoding="utf-8")
 
@@ -196,18 +211,26 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
             cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
         else:
             cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_threads","1","-vf",vf,"-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
-        run(cmd, 300); segments.append(seg)
+        run(cmd, 300)
+        actual_duration=probe_duration(seg)
+        if abs(actual_duration-dur) > 0.08:
+            raise RenderError(f"scene {idx}: encoded segment has {actual_duration:.3f}s instead of {dur:.3f}s")
+        segments.append(seg)
 
     concat=job_dir/"concat.txt"
     concat.write_text("\n".join(f"file '{p.resolve().as_posix()}'" for p in segments)+"\n",encoding="utf-8")
     lower=job_dir/"lower.mp4"
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",str(concat),"-c","copy",str(lower)],120)
+    lower_duration=probe_duration(lower)
+    if abs(lower_duration-sum(durations)) > 0.12:
+        raise RenderError(f"concatenated visual track lost scenes: {lower_duration:.3f}s vs {sum(durations):.3f}s")
     out=job_dir/"preview.mp4"
     fc=(f"[0:v]crop={CANVAS_W}:{VIDEO_H}:0:0[lower];[lower]pad={CANVAS_W}:{CANVAS_H}:0:{VIDEO_Y}:color=black[base];"
         f"[base][1:v]overlay=0:0:eof_action=repeat:repeatlast=1[locked];[locked]ass={ass.as_posix()}[v]")
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(lower),"-loop","1","-i",str(header),"-i",str(audio),
          "-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-map","2:a:0","-t",f"{audio_dur:.3f}","-c:v","libx264","-threads","2","-preset","veryfast","-crf","16",
-         "-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)],360)
+         "-pix_fmt","yuv420p","-af","loudnorm=I=-16:TP=-1.5:LRA=11,volume=3dB,alimiter=limit=0.85","-ac","2","-ar","48000",
+         "-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)],360)
 
     frame=job_dir/"qc_frame.png"
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss","0.3","-i",str(out),"-frames:v","1",str(frame)],60)

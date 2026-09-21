@@ -240,16 +240,15 @@ def _caption_timings(scene: dict, cues: list[dict], duration: float) -> list[dic
     timings=[]; cursor=0
     for beat in beats:
         targets=_words(beat)
-        matched=[]
         for target in targets:
             while cursor < len(words) and words[cursor]["word"] != target:
                 cursor += 1
             if cursor >= len(words):
                 return []
-            matched.append(words[cursor]); cursor += 1
-        if matched:
-            timings.append({"text":beat,"start_seconds":max(0.0,(matched[0]["start"]-origin)*scale),
-                            "end_seconds":min(duration,(matched[-1]["end"]-origin)*scale)})
+            match=words[cursor]
+            timings.append({"text":target.upper(),"start_seconds":max(0.0,(match["start"]-origin)*scale),
+                            "end_seconds":min(duration,(match["end"]-origin)*scale)})
+            cursor += 1
     for index in range(len(timings)-1):
         timings[index]["end_seconds"]=timings[index+1]["start_seconds"]
     if timings:
