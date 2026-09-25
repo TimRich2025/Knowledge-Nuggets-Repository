@@ -7,6 +7,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from .config import CACHE, MAX_CACHE_GB
 from .visual_contract import validate_visual_contract
+from .production_contract import (
+    NATURAL_MALE_EDGE_VOICES,
+    MAX_SHOT_SECONDS,
+    validate_measured_render_contract,
+    validate_submission_contract,
+)
 
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "KnowledgeNuggetsSourceIngest/1.0"})
@@ -118,6 +124,8 @@ def ingest_video_segment(urls: list[str], shot_start: float, shot_end: float, po
     accurate_seek=start-fast_seek
     if length < 1.5:
         raise IngestError("verified shot interval must be at least 1.5 seconds")
+    if length > MAX_SHOT_SECONDS:
+        raise IngestError(f"verified shot exceeds the {MAX_SHOT_SECONDS:.1f}s production limit")
     for url in [u for u in urls if u]:
         key=hashlib.sha256(f"{url}|{start:.3f}|{end:.3f}|1080|accurate-seek-v2".encode()).hexdigest()
         dest=CACHE/f"{key}.mp4"; meta_path=CACHE/f"{key}.json"
@@ -240,20 +248,20 @@ def _caption_timings(scene: dict, cues: list[dict], duration: float) -> list[dic
     timings=[]; cursor=0
     for beat in beats:
         targets=_words(beat)
+        matched=[]
         for target in targets:
             while cursor < len(words) and words[cursor]["word"] != target:
                 cursor += 1
             if cursor >= len(words):
                 return []
             match=words[cursor]
-            timings.append({"text":target.upper(),"start_seconds":max(0.0,(match["start"]-origin)*scale),
-                            "end_seconds":min(duration,(match["end"]-origin)*scale)})
+            matched.append(match)
             cursor += 1
-    for index in range(len(timings)-1):
-        timings[index]["end_seconds"]=timings[index+1]["start_seconds"]
-    if timings:
-        timings[0]["start_seconds"]=0.0
-        timings[-1]["end_seconds"]=duration
+        if not matched:
+            return []
+        timings.append({"text":beat.upper(),
+                        "start_seconds":max(0.0,(matched[0]["start"]-origin)*scale),
+                        "end_seconds":min(duration,(matched[-1]["end"]-origin)*scale)})
     return timings
 
 
@@ -264,10 +272,11 @@ def synthesize_edge_scene_audio(
     max_durations: list[float],
 ) -> tuple[dict,list[dict],list[list[dict]]]:
     """Create no-key neural narration plus measured word-boundary subtitles."""
-    if not re.fullmatch(r"[A-Za-z]{2,3}-[A-Za-z]{2,3}-[A-Za-z0-9]+Neural",voice):
-        raise IngestError("invalid Edge neural voice")
-    if not re.fullmatch(r"[+-]\d{1,2}%",rate):
-        raise IngestError("invalid Edge neural speaking rate")
+    if voice not in NATURAL_MALE_EDGE_VOICES:
+        raise IngestError("production contract requires an approved natural male Edge voice")
+    rate_match=re.fullmatch(r"[+-](\d{1,2})%",rate)
+    if not rate_match or int(rate_match.group(1)) > 12:
+        raise IngestError("production contract requires a natural Edge speaking rate between -12% and +12%")
     encoded=[]; cue_sets=[]
     with tempfile.TemporaryDirectory(prefix="edge-tts-",dir=CACHE) as tmp_name:
         tmp=Path(tmp_name)
@@ -412,6 +421,10 @@ def ingest_scene_audio(
                 if abs(duration-target) > 0.025:
                     output=tmp/f"part-{index:02d}-fit.wav"
                     factor=duration/target
+                    if factor > 1.12:
+                        raise IngestError(
+                            f"scene audio {index}: natural narration does not fit the verified short shot; split the explanation"
+                        )
                     command=["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(wav),
                              "-af",_atempo_chain(factor),"-ac","1","-ar","48000","-c:a","pcm_s16le",str(output)]
                     result=subprocess.run(command,capture_output=True,text=True,timeout=90)
@@ -441,6 +454,10 @@ def ingest_scene_audio(
 
 def ingest_job(job: dict) -> dict:
     prune_cache()
+    try:
+        validate_submission_contract(job)
+    except ValueError as exc:
+        raise IngestError(str(exc)) from exc
     raw_scenes=job.get("scenes") or []
     scene_audio = job.get("scene_audio_base64")
     speech_timings: list[dict] | None = None
@@ -489,4 +506,8 @@ def ingest_job(job: dict) -> dict:
         scenes.append({**s, "validated_frame_time": 0.75, "source_start_offset": 0,
                        "local_path":media["path"],"ingested_from":media["url"],"ingest_meta":media})
     if not scenes: raise IngestError("job has no scenes")
+    try:
+        validate_measured_render_contract(scenes)
+    except ValueError as exc:
+        raise IngestError(str(exc)) from exc
     return {"audio": audio, "scenes": scenes}

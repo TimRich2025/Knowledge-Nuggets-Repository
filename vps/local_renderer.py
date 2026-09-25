@@ -3,6 +3,7 @@ import json, re, subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
 from layout_lock import build_header, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H, HEADER_H
+from .production_contract import validate_measured_render_contract, validate_submission_contract
 
 class RenderError(RuntimeError): pass
 
@@ -153,7 +154,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                 break
             if txt: intervals.append((txt,start,end))
         if not intervals:
-            intervals=caption_intervals(scene,dur)
+            raise RenderError("measured word-boundary caption timings are required")
         for txt,start,end,words in phrase_intervals(scene,intervals,dur):
             a=t+start; b=t+end
             placement=rf"\an5\pos(540,{cy})"
@@ -186,12 +187,17 @@ def scene_filter(scene: dict, scene_index: int = 1, duration: float | None = Non
 
 def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     if job.get("production_status") != "READY": raise RenderError("production_status must be READY")
+    try:
+        validate_submission_contract(job)
+        validate_measured_render_contract(ingested["scenes"])
+    except ValueError as exc:
+        raise RenderError(str(exc)) from exc
     q=job.get("core_question_lines")
     if not isinstance(q,list) or len(q)!=2: raise RenderError("core_question_lines must contain exactly two lines")
     scenes=ingested["scenes"]
     audio=Path(ingested["audio"]["path"])
     audio_dur=probe_duration(audio)
-    if not 8 <= audio_dur <= 30.5: raise RenderError(f"narration outside 8-30s target: {audio_dur:.2f}s")
+    if not 15 <= audio_dur <= 60: raise RenderError(f"narration outside 15-60s target: {audio_dur:.2f}s")
     speech_intervals=[]
     previous_end=0.0
     for idx, scene in enumerate(scenes, 1):

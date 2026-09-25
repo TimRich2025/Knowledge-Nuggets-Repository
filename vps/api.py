@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from redis import Redis
 from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL
 from .visual_contract import validate_visual_contract
+from .production_contract import validate_submission_contract
 from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
@@ -152,13 +153,10 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")
-    edge_tts = str(job.tts_provider or "").upper() == "EDGE"
-    if job.tts_provider and not edge_tts:
-        raise HTTPException(422,"tts_provider must be EDGE")
-    derived_speech_timing = bool(job.scene_audio_base64) or edge_tts
-    if job.scene_audio_base64 and len(job.scene_audio_base64) != len(job.scenes):
-        raise HTTPException(422,"scene_audio_base64 must contain exactly one audio segment per scene")
-    previous_speech_end = 0.0
+    try:
+        validate_submission_contract(job.model_dump())
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     for i,s in enumerate(job.scenes,1):
         try: validate_visual_contract(s, i)
         except ValueError as e: raise HTTPException(422, str(e))
@@ -170,28 +168,12 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
             ss=float(s["shot_start_seconds"]); se=float(s["shot_end_seconds"])
         except Exception:
             raise HTTPException(422,f"scene {i}: verified shot interval required")
-        if se-ss < 1.5:
-            raise HTTPException(422,f"scene {i}: verified shot interval must be at least 1.5s")
-        if not derived_speech_timing:
-            try:
-                speech_start=float(s["speech_start_seconds"]); speech_end=float(s["speech_end_seconds"])
-            except Exception:
-                raise HTTPException(422,f"scene {i}: verified speech interval required")
-            if speech_start < 0 or speech_end-speech_start < 0.6:
-                raise HTTPException(422,f"scene {i}: invalid verified speech interval")
-            if i == 1 and speech_start > 0.15:
-                raise HTTPException(422,"scene 1: narration must begin inside the first verified beat")
-            if speech_start + 0.05 < previous_speech_end or (i > 1 and abs(speech_start-previous_speech_end) > 0.10):
-                raise HTTPException(422,f"scene {i}: verified speech intervals must be contiguous and ordered")
-            previous_speech_end = speech_end
         if float(s.get("semantic_score") or 0) < 94:
             raise HTTPException(422,f"scene {i}: semantic score below exact-match gate")
         if str(s.get("media_type") or "").upper() != "VIDEO":
             raise HTTPException(422,f"scene {i}: real video source required")
         if not (s.get("source_url") or s.get("direct_download_url")):
             raise HTTPException(422,f"scene {i}: exact direct video URL required")
-    if not job.audio_url and not job.audio_base64 and not job.scene_audio_base64 and not edge_tts:
-        raise HTTPException(422,"audio_url, audio_base64, scene_audio_base64, or EDGE TTS required")
     jid=f"{safe_id(job.content_id)}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     r=db(); payload=job.model_dump(); payload["_job_id"]=jid
     r.hset(f"kn:job:{jid}",mapping={"state":"PENDING","payload":json.dumps(payload),"updated_at":str(time.time())})

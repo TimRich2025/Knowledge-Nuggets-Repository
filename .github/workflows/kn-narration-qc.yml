@@ -29,7 +29,9 @@ jobs:
           command -v ffmpeg
           python -m pip install -r vps/requirements.txt
       - name: Synthesize and verify all spoken words
-        run: python -m vps.tts_qc
+        run: |
+          python -m unittest vps.test_production_contract
+          python -m vps.tts_qc
       - name: Save narration for preview review
         if: success()
         uses: actions/upload-artifact@v4
