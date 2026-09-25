@@ -20,7 +20,6 @@ class ProductionContractTests(unittest.TestCase):
         job = {
             "tts_provider": "EDGE",
             "tts_voice": "en-US-AndrewMultilingualNeural",
-            "tts_rate": "+8%",
             "scenes": [SCENE],
         }
         validate_submission_contract(job)

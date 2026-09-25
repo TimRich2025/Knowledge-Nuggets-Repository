@@ -470,7 +470,7 @@ def ingest_job(job: dict) -> dict:
         audio,speech_timings,caption_timings=synthesize_edge_scene_audio(
             raw_scenes,
             str(job.get("tts_voice") or "en-US-AndrewMultilingualNeural"),
-            str(job.get("tts_rate") or "-3%"),
+            str(job.get("tts_rate") or "+8%"),
             max_durations,
         )
     elif scene_audio:

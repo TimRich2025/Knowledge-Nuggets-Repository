@@ -37,7 +37,7 @@ def validate_submission_contract(job: dict[str, Any]) -> None:
         raise ValueError(f"production contract requires one approved natural male voice: {allowed}")
     if job.get("audio_url") or job.get("audio_base64") or job.get("scene_audio_base64"):
         raise ValueError("production contract forbids unverified supplied audio")
-    rate = str(job.get("tts_rate") or "+0%")
+    rate = str(job.get("tts_rate") or "+8%")
     match = re.fullmatch(r"([+-])(\d{1,2})%", rate)
     if not match or int(match.group(2)) > 12:
         raise ValueError("production contract requires a natural EDGE speaking rate between -12% and +12%")
