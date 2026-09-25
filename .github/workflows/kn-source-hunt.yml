@@ -63,27 +63,7 @@ jobs:
         if: always()
         run: |
           if [ -f output/source_review_queue.json ]; then
-            python - <<'PY'
-            import json
-            queue = json.load(open('output/source_review_queue.json', encoding='utf-8'))
-            review = []
-            for scene in queue.get('scenes', []):
-                review.append({
-                    'scene_number': scene.get('scene_number'),
-                    'spoken_phrase': scene.get('spoken_phrase'),
-                    'status': scene.get('status'),
-                    'candidates': [{
-                        'candidate_id': item.get('candidate_id'),
-                        'title': item.get('title'),
-                        'direct_download_url': item.get('direct_download_url'),
-                        'source_duration_seconds': item.get('source_duration_seconds'),
-                        'source_width': item.get('source_width'),
-                        'source_height': item.get('source_height'),
-                        'contact_sheet': item.get('contact_sheet'),
-                    } for item in scene.get('candidates', [])],
-                })
-            print(json.dumps(review, indent=2))
-            PY
+            cat output/source_review_queue.json
           fi
       - name: Upload visual review queue
         if: always()
