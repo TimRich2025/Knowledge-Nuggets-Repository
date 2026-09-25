@@ -23,3 +23,7 @@ POLL_SECONDS = float(os.environ.get("KN_POLL_SECONDS", "2"))
 MAX_CACHE_GB = float(os.environ.get("KN_MAX_CACHE_GB", "80"))
 YOUTUBE_DATA_API_KEY = os.environ.get("KN_YOUTUBE_DATA_API_KEY", "")
 YOUTUBE_TREND_REGION = os.environ.get("KN_YOUTUBE_TREND_REGION", "US").upper()
+YOUTUBE_UPLOAD_ENABLED = os.environ.get("KN_YOUTUBE_UPLOAD_ENABLED", "true").lower() == "true"
+YOUTUBE_OAUTH_CLIENT_ID = os.environ.get("KN_YOUTUBE_OAUTH_CLIENT_ID", "")
+YOUTUBE_OAUTH_CLIENT_SECRET = os.environ.get("KN_YOUTUBE_OAUTH_CLIENT_SECRET", "")
+YOUTUBE_OAUTH_REFRESH_TOKEN = os.environ.get("KN_YOUTUBE_OAUTH_REFRESH_TOKEN", "")

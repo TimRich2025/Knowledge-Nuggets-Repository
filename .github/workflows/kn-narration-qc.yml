@@ -7,6 +7,11 @@ on:
       - vps/source_cache.py
       - vps/social_metadata.py
       - vps/test_social_metadata.py
+      - vps/youtube_publisher.py
+      - vps/test_youtube_publisher.py
+      - vps/pipeline.py
+      - vps/config.py
+      - vps/api.py
       - .github/workflows/kn-narration-qc.yml
   workflow_dispatch:
 
@@ -34,6 +39,7 @@ jobs:
         run: |
           python -m unittest vps.test_production_contract
           python -m unittest vps.test_social_metadata
+          python -m unittest vps.test_youtube_publisher
           python -m vps.tts_qc
       - name: Save narration for preview review
         if: success()

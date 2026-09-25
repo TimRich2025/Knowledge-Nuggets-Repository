@@ -20,6 +20,16 @@ always the exact beginning of the description, starts with `but the fact is,`
 and remains within YouTube's 100-character title limit. The description
 contains at most five relevant hashtags, including `#Shorts`.
 
+## Unattended private publishing
+
+After a render passes every production gate, the worker uploads it directly to
+YouTube as `private`. It never has a public or unlisted code path. Set
+`KN_YOUTUBE_UPLOAD_ENABLED=true` and the three `KN_YOUTUBE_OAUTH_*` variables
+once in the deployment. The refresh token must have the YouTube upload scope;
+the worker refreshes access tokens itself for every run. A missing or invalid
+OAuth configuration fails the job rather than silently leaving a finished
+video unpublished.
+
 Set `KN_YOUTUBE_DATA_API_KEY` on the worker to live-rank topic-related hashtags
 from recent high-view YouTube Shorts. Set `KN_YOUTUBE_TREND_REGION` if the
 target market is not US. Without the API key the endpoint returns a labelled

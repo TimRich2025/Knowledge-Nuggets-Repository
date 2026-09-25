@@ -34,6 +34,8 @@ class Job(BaseModel):
     tts_rate: str | None = None
     scenes: list[dict]
     callback_url: str | None = None
+    topic: str | None = Field(default=None, max_length=240)
+    fact_statement: str | None = Field(default=None, max_length=600)
 
 class SourceProbe(BaseModel):
     source_url: str = Field(min_length=12, max_length=4000)
