@@ -469,7 +469,7 @@ def ingest_job(job: dict) -> dict:
             raise IngestError("verified visual durations are required before neural TTS") from exc
         audio,speech_timings,caption_timings=synthesize_edge_scene_audio(
             raw_scenes,
-            str(job.get("tts_voice") or "en-US-ChristopherNeural"),
+            str(job.get("tts_voice") or "en-US-AndrewMultilingualNeural"),
             str(job.get("tts_rate") or "-3%"),
             max_durations,
         )
