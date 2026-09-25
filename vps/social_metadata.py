@@ -30,6 +30,8 @@ GENERIC_RELEVANT_TAGS = {
     "microgravity", "earthscience", "learnontiktok", "education",
 }
 BLOCKED_TAGS = {"fyp", "foryou", "viral", "trending", "follow", "subscribe", "like"}
+TITLE_MAX_CHARS = 100
+DESCRIPTION_OPENING = "but the fact is, "
 
 
 class MetadataError(RuntimeError):
@@ -77,11 +79,17 @@ def _fact_from_script(script: str) -> str:
     return compact[:420].rsplit(" ", 1)[0].rstrip(".,;:!") + "."
 
 
-def _description(fact_statement: str, hashtags: list[str]) -> str:
+def _title_and_description(fact_statement: str, hashtags: list[str]) -> tuple[str, str]:
+    """Create a YouTube-safe title that is the literal beginning of the description."""
     fact = _fact_from_script(fact_statement)
     if fact.lower().startswith("but the fact is"):
         fact = re.sub(r"^but the fact is[,:]?\s*", "", fact, flags=re.I)
-    return f"But the fact is, {fact}\n\n{' '.join(hashtags)}"
+    opening = f"{DESCRIPTION_OPENING}{fact}"
+    if len(opening) <= TITLE_MAX_CHARS:
+        title = opening
+    else:
+        title = opening[:TITLE_MAX_CHARS + 1].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return title, f"{opening}\n\n{' '.join(hashtags)}"
 
 
 def _youtube_items(topic: str, api_key: str, region: str) -> list[dict[str, Any]]:
@@ -143,7 +151,7 @@ def build_social_metadata(
     api_key: str | None = None,
     region: str | None = None,
 ) -> dict[str, Any]:
-    """Return a compact, publish-ready description and up to five safe hashtags."""
+    """Return a title, matching description, and up to five safe hashtags."""
     normalized_topic = " ".join(topic.split())
     if len(normalized_topic) < 3:
         raise MetadataError("topic must contain at least three characters")
@@ -169,9 +177,11 @@ def build_social_metadata(
             break
     if "#Shorts" not in selected:
         selected = (selected[:4] + ["#Shorts"])
+    title, description = _title_and_description(fact_statement, selected)
     return {
         "topic": normalized_topic,
-        "description": _description(fact_statement, selected),
+        "title": title,
+        "description": description,
         "hashtags": selected,
         "trend_source": source_status,
         "trend_region": configured_region,

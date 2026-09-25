@@ -15,7 +15,9 @@ This replaces GitHub Actions as the production runtime. GitHub stores code only;
 
 Immediately before any YouTube upload, Make calls `POST /social-metadata` with
 the Short's English `topic` and a concise factual statement from the approved
-script. The returned description always starts with `But the fact is,` and
+script. Use the returned `title` and `description` together: the title is
+always the exact beginning of the description, starts with `but the fact is,`
+and remains within YouTube's 100-character title limit. The description
 contains at most five relevant hashtags, including `#Shorts`.
 
 Set `KN_YOUTUBE_DATA_API_KEY` on the worker to live-rank topic-related hashtags
