@@ -11,6 +11,19 @@ This replaces GitHub Actions as the production runtime. GitHub stores code only;
 5. The final frame is checked against `KN_LAYOUT_V1`; header MAE > 12 fails QC.
 6. Nothing publishes to YouTube. The result returns to Make via callback for review.
 
+## Publish metadata contract
+
+Immediately before any YouTube upload, Make calls `POST /social-metadata` with
+the Short's English `topic` and a concise factual statement from the approved
+script. The returned description always starts with `But the fact is,` and
+contains at most five relevant hashtags, including `#Shorts`.
+
+Set `KN_YOUTUBE_DATA_API_KEY` on the worker to live-rank topic-related hashtags
+from recent high-view YouTube Shorts. Set `KN_YOUTUBE_TREND_REGION` if the
+target market is not US. Without the API key the endpoint returns a labelled
+topic fallback, never pretends to have a live trend signal. Store the API key in
+the deployment's environment only, never in this repository.
+
 ## Deploy
 
 Copy `.env.example` to `.env`, set a long `KN_API_TOKEN`, then:

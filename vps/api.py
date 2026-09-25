@@ -5,12 +5,13 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from redis import Redis
-from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL
+from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL, YOUTUBE_DATA_API_KEY, YOUTUBE_TREND_REGION
 from .visual_contract import validate_visual_contract
 from .production_contract import validate_submission_contract
 from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
+from .social_metadata import MetadataError, build_social_metadata
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
 _public_probe_requests: dict[str, list[float]] = {}
@@ -42,6 +43,10 @@ class SourceProbe(BaseModel):
 class SourceCandidateSearch(BaseModel):
     query: str = Field(min_length=2, max_length=240)
     limit: int = Field(default=6, ge=1, le=12)
+
+class SocialMetadata(BaseModel):
+    topic: str = Field(min_length=3, max_length=240)
+    fact_statement: str = Field(default="", max_length=600)
 
 def db():
     if not REDIS_URL: raise HTTPException(503,"REDIS_URL is not configured")
@@ -113,6 +118,20 @@ def source_candidates(payload: SourceCandidateSearch, authorization: str | None 
         "candidates": candidates,
         "approval_policy": "Every candidate remains UNVERIFIED. A visible-frame review and an exact continuous shot interval are mandatory before rendering.",
     }
+
+@app.post("/social-metadata")
+def social_metadata(payload: SocialMetadata, authorization: str | None = Header(default=None)):
+    """Build the unique publish copy immediately before a Short is uploaded."""
+    auth(authorization)
+    try:
+        return build_social_metadata(
+            payload.topic,
+            payload.fact_statement,
+            api_key=YOUTUBE_DATA_API_KEY,
+            region=YOUTUBE_TREND_REGION,
+        )
+    except MetadataError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 @app.get("/source-probes/{probe_id}/{frame_name}")
 def source_probe_frame(probe_id: str, frame_name: str, token: str):

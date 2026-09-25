@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - vps/source_cache.py
+      - vps/social_metadata.py
+      - vps/test_social_metadata.py
       - .github/workflows/kn-narration-qc.yml
   workflow_dispatch:
 
@@ -31,6 +33,7 @@ jobs:
       - name: Synthesize and verify all spoken words
         run: |
           python -m unittest vps.test_production_contract
+          python -m unittest vps.test_social_metadata
           python -m vps.tts_qc
       - name: Save narration for preview review
         if: success()
