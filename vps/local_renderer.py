@@ -2,7 +2,9 @@ from __future__ import annotations
 import json, re, shutil, subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
-from layout_lock import build_header, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H, HEADER_H
+from layout_lock import (build_header, caption_layout, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H,
+                         HEADER_H, CAPTION_FONT_NAME, CAPTION_MARGIN,
+                         caption_ass_fontsize)
 from .production_contract import concat_duration_tolerance, validate_measured_render_contract, validate_submission_contract
 
 class RenderError(RuntimeError): pass
@@ -50,116 +52,81 @@ def _spoken_tokens(text: str) -> list[tuple[str, float]]:
         tokens.append((token.lower(),weight))
     return tokens
 
-def caption_intervals(scene: dict, duration: float) -> list[tuple[str, float, float]]:
-    beats=[str(x).strip().upper() for x in (scene.get("caption_beats") or []) if str(x).strip()]
-    if not beats:
-        beats=[str(scene.get("spoken_phrase") or "").strip().upper()]
-    spoken=_spoken_tokens(str(scene.get("spoken_phrase") or ""))
-    cursor=0
-    weights=[]
-    for beat in beats:
-        beat_words=[word for word,_ in _spoken_tokens(beat)]
-        weight=0.0
-        for word in beat_words:
-            while cursor < len(spoken) and spoken[cursor][0] != word:
-                cursor += 1
-            if cursor < len(spoken):
-                weight += spoken[cursor][1]
-                cursor += 1
-            else:
-                weight += max(1.0,len(word)/4.5)
-        weights.append(max(0.6,weight))
-    total=sum(weights) or float(len(beats))
-    intervals=[]; elapsed=0.0
-    for index,(beat,weight) in enumerate(zip(beats,weights)):
-        start=elapsed
-        elapsed=duration if index == len(beats)-1 else elapsed+duration*(weight/total)
-        intervals.append((beat,start,elapsed))
-    return intervals
+def scene_word_times(scene: dict, duration: float) -> list[tuple[str, float, float]]:
+    """Every caption word of one scene with the moment it is spoken.
 
-def phrase_intervals(scene: dict, intervals: list[tuple[str, float, float]], duration: float) -> list[tuple[str, float, float, list[tuple[str, float, float]]]]:
-    """Keep caption phrases and retain the spoken time of every word."""
-    beats=[str(x).strip().upper() for x in (scene.get("caption_beats") or []) if str(x).strip()]
-    if not beats:
-        beats=[str(scene.get("spoken_phrase") or "").strip().upper()]
-    if [word for beat in beats for word,_ in _spoken_tokens(beat)] != [word for word,_ in _spoken_tokens(str(scene.get("spoken_phrase") or ""))]:
-        raise RenderError("caption text differs from the spoken script")
+    The measured cues may group several words; their time is split across those
+    words by weight so each one can appear on its own beat.
+    """
+    cues=scene.get("caption_timings") or []
+    if not isinstance(cues,list) or not cues:
+        raise RenderError("measured word-boundary caption timings are required")
     words=[]
-    for phrase,start,end in intervals:
-        tokens=_spoken_tokens(phrase)
+    for cue in cues:
+        try:
+            text=str(cue["text"]).strip()
+            start=max(0.0,min(duration,float(cue["start_seconds"])))
+            end=min(duration,max(start+0.05,float(cue["end_seconds"])))
+        except (KeyError,TypeError,ValueError) as exc:
+            raise RenderError("invalid measured caption timing") from exc
+        tokens=_spoken_tokens(text)
+        if not tokens:
+            continue
         total=sum(weight for _,weight in tokens) or 1.0
         cursor=start
         for index,(word,weight) in enumerate(tokens):
-            next_time=end if index==len(tokens)-1 else cursor+(end-start)*weight/total
-            words.append((word,cursor,next_time)); cursor=next_time
-    grouped=[]; cursor=0
-    for beat in beats:
-        targets=[word for word,_ in _spoken_tokens(beat)]
-        matched=words[cursor:cursor+len(targets)]
-        if len(matched)!=len(targets) or [word for word,_,_ in matched]!=targets:
-            raise RenderError("caption timing words differ from the spoken script")
-        grouped.append((beat,matched[0][1],matched[-1][2],matched))
-        cursor+=len(targets)
-    if cursor!=len(words):
-        raise RenderError("caption timing contains words absent from the spoken script")
-    return grouped
-
-def typewriter_text(text: str, words: list[tuple[str, float, float]], phrase_start: float) -> str:
-    """Reveal each word only while that exact word is being spoken."""
-    result=[]
-    for index,match in enumerate(re.finditer(r"[A-Za-z0-9']+",text)):
-        word=match.group()
-        measured,start,end=words[index]
-        if word.lower()!=measured:
-            raise RenderError("typed caption does not match word timing")
-        if index:
-            result.append("\u00a0\u00a0")
-        word_start=round(1000*(start-phrase_start))
-        # Every letter uses the same step. Natural pauses between spoken words
-        # remain pauses; they must not accelerate or stretch the typing itself.
-        letter_ms=26
-        for letter,char in enumerate(word):
-            at=max(0,word_start+letter_ms*letter)
-            result.append(r"{\alpha&HFF&\t("+f"{at},{at+1}"+r",\alpha&H00&)}"+ass_escape(char))
-    return "".join(result)
+            nxt=end if index==len(tokens)-1 else cursor+(end-start)*weight/total
+            words.append((word.upper(),cursor,nxt))
+            cursor=nxt
+    if not words:
+        raise RenderError("measured caption timings contain no words")
+    spoken=[word.upper() for word,_ in _spoken_tokens(str(scene.get("spoken_phrase") or ""))]
+    if [word for word,_,_ in words]!=spoken:
+        raise RenderError("caption text differs from the spoken script")
+    return words
 
 def build_ass(scenes: list[dict], durations: list[float], out: Path):
-    header="""[Script Info]
+    """Captions that build up word by word and never leave the frame.
+
+    Each word is its own event, placed by layout_lock.caption_layout, which
+    wraps the beat inside CAPTION_MARGIN. A word pops in when it is spoken and
+    then stays put for the rest of the scene, so the sentence is readable
+    without sound and nothing shifts once it is on screen.
+    """
+    header=f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {CANVAS_W}
+PlayResY: {CANVAS_H}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Main,Noto Sans,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,1,5,90,90,0,1
+Style: Main,{CAPTION_FONT_NAME},{caption_ass_fontsize()},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,6,0,5,{CAPTION_MARGIN},{CAPTION_MARGIN},0,1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
-    events=[]; t=0.0; cy=VIDEO_Y+VIDEO_H//2
+    events=[]
+    elapsed=0.0
     for scene,dur in zip(scenes,durations):
-        measured=scene.get("caption_timings") or []
-        intervals=[]
-        for item in measured:
-            try:
-                txt=str(item["text"]).strip().upper()
-                start=max(0.0,min(dur,float(item["start_seconds"])))
-                end=min(dur,max(start+0.05,float(item["end_seconds"])))
-                if start >= dur or end <= start:
-                    raise ValueError("caption timing outside scene")
-            except (KeyError,TypeError,ValueError):
-                intervals=[]
-                break
-            if txt: intervals.append((txt,start,end))
-        if not intervals:
-            raise RenderError("measured word-boundary caption timings are required")
-        for txt,start,end,words in phrase_intervals(scene,intervals,dur):
-            a=t+start; b=t+end
-            placement=rf"\an5\pos(540,{cy})"
-            events.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Main,,0,0,0,,{{{placement}}}{typewriter_text(txt,words,start)}")
-        t+=dur
+        words=scene_word_times(scene,dur)
+        placed=caption_layout([word for word,_,_ in words])
+        if len(placed)!=len(words):
+            raise RenderError("caption layout lost a word")
+        for (word,start,_),(laid,cx,cy) in zip(words,placed):
+            if laid!=word:
+                raise RenderError("caption layout reordered the words")
+            appear=elapsed+start
+            # Overshoot then settle, and fade in slightly faster than it scales,
+            # so the word reads as placed rather than as flying in.
+            effect=(r"\an5\pos(" f"{cx},{cy}" r")"
+                    r"\fscx122\fscy122\t(0,120,\fscx100\fscy100)"
+                    r"\alpha&HFF&\t(0,70,\alpha&H00&)")
+            events.append(
+                f"Dialogue: 0,{ass_time(appear)},{ass_time(elapsed+dur)},Main,,0,0,0,,"
+                f"{{{effect}}}{ass_escape(word)}")
+        elapsed+=dur
     out.write_text(header+"\n".join(events)+"\n",encoding="utf-8")
 
 def scene_filter(scene: dict, scene_index: int = 1, duration: float | None = None) -> str:
@@ -320,8 +287,13 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
 
     frame=job_dir/"qc_frame.png"
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss","0.3","-i",str(out),"-frames:v","1",str(frame)],60)
-    actual=Image.open(frame).convert("RGB"); expected=Image.open(header).convert("RGB")
+    actual=Image.open(frame).convert("RGB")
     if actual.size!=(CANVAS_W,CANVAS_H): raise RenderError(f"wrong output size: {actual.size}")
+    # The overlay spans the whole frame now; its header band is the only part
+    # that is fully opaque, so that band is what the layout lock compares.
+    band=Image.open(header).convert("RGBA").crop((0,0,CANVAS_W,HEADER_H))
+    expected=Image.new("RGB",(CANVAS_W,HEADER_H),(0,0,0))
+    expected.paste(band,(0,0),band)
     diff=ImageChops.difference(actual.crop((0,0,CANVAS_W,HEADER_H)),expected)
     mae=sum(ImageStat.Stat(diff).mean)/3
     if mae>12: raise RenderError(f"layout lock drift: MAE {mae:.3f}")

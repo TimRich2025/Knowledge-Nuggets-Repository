@@ -11,6 +11,8 @@ on:
       - vps/test_shot_bounds.py
       - vps/local_renderer.py
       - vps/test_concat_tolerance.py
+      - layout_lock.py
+      - vps/test_caption_layout.py
       - vps/social_metadata.py
       - vps/test_social_metadata.py
       - vps/youtube_publisher.py
@@ -47,6 +49,7 @@ jobs:
           python -m unittest vps.test_tts_command
           python -m unittest vps.test_shot_bounds
           python -m unittest vps.test_concat_tolerance
+          python -m unittest vps.test_caption_layout
           python -m unittest vps.test_social_metadata
           python -m unittest vps.test_youtube_publisher
           python -m vps.tts_qc
