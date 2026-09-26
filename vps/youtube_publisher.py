@@ -21,20 +21,30 @@ class YouTubePublishError(RuntimeError):
     pass
 
 
+def _oauth_client_fields() -> dict[str, str]:
+    if not YOUTUBE_OAUTH_CLIENT_ID:
+        raise YouTubePublishError("private YouTube publishing is not configured: set KN_YOUTUBE_OAUTH_CLIENT_ID")
+    fields = {"client_id": YOUTUBE_OAUTH_CLIENT_ID}
+    # Google classifies a desktop-client secret as optional. Retaining it when
+    # available also supports the web client used by the production worker.
+    if YOUTUBE_OAUTH_CLIENT_SECRET:
+        fields["client_secret"] = YOUTUBE_OAUTH_CLIENT_SECRET
+    return fields
+
+
 def _access_token() -> str:
-    if not all((YOUTUBE_OAUTH_CLIENT_ID, YOUTUBE_OAUTH_CLIENT_SECRET, YOUTUBE_OAUTH_REFRESH_TOKEN)):
+    if not YOUTUBE_OAUTH_REFRESH_TOKEN:
         raise YouTubePublishError(
-            "private YouTube publishing is not configured: set the three KN_YOUTUBE_OAUTH_* variables"
+            "private YouTube publishing is not configured: set KN_YOUTUBE_OAUTH_CLIENT_ID and KN_YOUTUBE_OAUTH_REFRESH_TOKEN"
         )
     try:
+        payload = _oauth_client_fields() | {
+            "refresh_token": YOUTUBE_OAUTH_REFRESH_TOKEN,
+            "grant_type": "refresh_token",
+        }
         response = requests.post(
             TOKEN_URL,
-            data={
-                "client_id": YOUTUBE_OAUTH_CLIENT_ID,
-                "client_secret": YOUTUBE_OAUTH_CLIENT_SECRET,
-                "refresh_token": YOUTUBE_OAUTH_REFRESH_TOKEN,
-                "grant_type": "refresh_token",
-            },
+            data=payload,
             timeout=(10, 30),
         )
         response.raise_for_status()
@@ -44,6 +54,26 @@ def _access_token() -> str:
     if not token:
         raise YouTubePublishError("YouTube token refresh returned no access token")
     return token
+
+
+def exchange_authorization_code(code: str, redirect_uri: str) -> str:
+    """Exchange the one-time Google callback code for an unattended refresh token."""
+    if not code or not redirect_uri:
+        raise YouTubePublishError("OAuth authorization code and redirect URI are required")
+    try:
+        payload = _oauth_client_fields() | {
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }
+        response = requests.post(TOKEN_URL, data=payload, timeout=(10, 30))
+        response.raise_for_status()
+        refresh_token = str(response.json().get("refresh_token") or "")
+    except (requests.RequestException, ValueError) as exc:
+        raise YouTubePublishError(f"could not exchange the YouTube authorization code: {exc}") from exc
+    if not refresh_token:
+        raise YouTubePublishError("Google did not return a refresh token; grant consent again")
+    return refresh_token
 
 
 def publish_private_short(video_path: Path, title: str, description: str) -> dict[str, Any]:

@@ -2,8 +2,9 @@ from __future__ import annotations
 import json, shutil, time, traceback
 from pathlib import Path
 from redis import Redis
-from .config import REDIS_URL, TMP
+from .config import REDIS_URL, TMP, YOUTUBE_OAUTH_REDIRECT_URI
 from .pipeline import process, callback
+from .youtube_publisher import YouTubePublishError, exchange_authorization_code
 
 def clean_work_dir(path: Path) -> None:
     """Remove render intermediates; finished previews live under OUTPUTS."""
@@ -11,6 +12,27 @@ def clean_work_dir(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
     else:
         path.unlink(missing_ok=True)
+
+
+def consume_youtube_oauth_code(r: Redis) -> None:
+    """Turn the short-lived browser code into a refresh token inside Railway.
+
+    The refresh token never travels through Make, GitHub or a local terminal.
+    It is exposed only once on the same one-time browser session that granted
+    consent, then stored as a protected worker variable.
+    """
+    code = r.getdel("kn:youtube_oauth:code")
+    if not code:
+        return
+    try:
+        refresh_token = exchange_authorization_code(code, YOUTUBE_OAUTH_REDIRECT_URI)
+        r.setex("kn:youtube_oauth:result", 600, refresh_token)
+        r.setex("kn:youtube_oauth:status", 600, "READY")
+        print("KN YouTube OAuth refresh token ready", flush=True)
+    except YouTubePublishError as exc:
+        r.setex("kn:youtube_oauth:error", 600, str(exc))
+        r.setex("kn:youtube_oauth:status", 600, "FAILED")
+        print(f"KN YouTube OAuth token exchange failed: {exc}", flush=True)
 
 def main():
     if not REDIS_URL: raise SystemExit("REDIS_URL missing")
@@ -21,6 +43,7 @@ def main():
         clean_work_dir(stale)
     print("KN worker ready; Redis queue connected",flush=True)
     while True:
+        consume_youtube_oauth_code(r)
         item=r.blpop("kn:queue",timeout=5)
         if not item: continue
         jid=item[1]; key=f"kn:job:{jid}"; row=r.hgetall(key)

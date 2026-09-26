@@ -34,6 +34,19 @@ class YouTubePublisherTests(unittest.TestCase):
         self.assertEqual(result["short_url"], "https://youtube.com/shorts/abc123")
         self.assertEqual(post.call_args_list[1].kwargs["json"]["status"]["privacyStatus"], "private")
 
+    @patch("vps.youtube_publisher.YOUTUBE_OAUTH_REFRESH_TOKEN", "refresh")
+    @patch("vps.youtube_publisher.YOUTUBE_OAUTH_CLIENT_SECRET", "")
+    @patch("vps.youtube_publisher.YOUTUBE_OAUTH_CLIENT_ID", "client")
+    @patch("vps.youtube_publisher.requests.post")
+    def test_refresh_allows_installed_client_without_secret(self, post) -> None:
+        token = Mock()
+        token.json.return_value = {"access_token": "access"}
+        token.raise_for_status.return_value = None
+        post.return_value = token
+        from .youtube_publisher import _access_token
+        self.assertEqual(_access_token(), "access")
+        self.assertNotIn("client_secret", post.call_args.kwargs["data"])
+
     def test_rejects_metadata_that_cannot_be_paired(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             video = Path(temp) / "preview.mp4"

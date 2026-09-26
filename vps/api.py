@@ -1,11 +1,11 @@
 from __future__ import annotations
-import base64, hashlib, hmac, json, os, re, subprocess, tempfile, time, uuid
+import base64, hashlib, hmac, json, os, re, secrets, subprocess, tempfile, time, urllib.parse, uuid
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from redis import Redis
-from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL, YOUTUBE_DATA_API_KEY, YOUTUBE_TREND_REGION
+from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL, YOUTUBE_DATA_API_KEY, YOUTUBE_TREND_REGION, YOUTUBE_OAUTH_BOOTSTRAP_ENABLED, YOUTUBE_OAUTH_CLIENT_ID, YOUTUBE_OAUTH_REDIRECT_URI
 from .visual_contract import validate_visual_contract
 from .production_contract import validate_submission_contract
 from .source_cache import IngestError
@@ -104,6 +104,73 @@ def allow_public_probe(request: Request) -> None:
         raise HTTPException(429, "source probe rate limit reached")
     recent.append(now)
     _public_probe_requests[client] = recent
+
+
+def oauth_bootstrap_state_key() -> str:
+    return "kn:youtube_oauth:state"
+
+
+def oauth_bootstrap_available() -> None:
+    if not YOUTUBE_OAUTH_BOOTSTRAP_ENABLED:
+        raise HTTPException(404, "YouTube OAuth bootstrap is disabled")
+    if not YOUTUBE_OAUTH_CLIENT_ID or not YOUTUBE_OAUTH_REDIRECT_URI:
+        raise HTTPException(503, "YouTube OAuth bootstrap is not configured")
+
+
+@app.get("/oauth/youtube/start", include_in_schema=False)
+def youtube_oauth_start():
+    """One-time, time-bounded consent handoff for the private publisher."""
+    oauth_bootstrap_available()
+    state = secrets.token_urlsafe(32)
+    db().setex(oauth_bootstrap_state_key(), 600, state)
+    query = urllib.parse.urlencode({
+        "client_id": YOUTUBE_OAUTH_CLIENT_ID,
+        "redirect_uri": YOUTUBE_OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "https://www.googleapis.com/auth/youtube.upload",
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    })
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{query}")
+
+
+@app.get("/oauth/youtube/callback", include_in_schema=False)
+def youtube_oauth_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+    oauth_bootstrap_available()
+    expected = db().get(oauth_bootstrap_state_key())
+    if not expected or not state or not hmac.compare_digest(expected, state):
+        raise HTTPException(400, "invalid or expired OAuth session")
+    r = db()
+    if error or not code:
+        r.setex("kn:youtube_oauth:error", 600, error or "Google returned no authorization code")
+        return legal_page("Authorization not completed", "<p>YouTube permission was not granted. Return to the production setup and try again.</p>")
+    r.setex("kn:youtube_oauth:code", 300, code)
+    poll = f"/oauth/youtube/result?state={urllib.parse.quote(state)}"
+    body = (
+        "<p>YouTube permission was received. The production worker is creating the private upload credential now.</p>"
+        "<p id='status'>Waiting for the worker. Keep this page open.</p>"
+        f"<script>const u='{poll}';const p=async()=>{{const r=await fetch(u);if(r.status===202){{setTimeout(p,1500);return}}document.getElementById('status').textContent=await r.text();}};p();</script>"
+    )
+    return legal_page("YouTube authorization received", body)
+
+
+@app.get("/oauth/youtube/result", include_in_schema=False)
+def youtube_oauth_result(state: str):
+    oauth_bootstrap_available()
+    r = db()
+    expected = r.get(oauth_bootstrap_state_key())
+    if not expected or not hmac.compare_digest(expected, state):
+        raise HTTPException(404, "OAuth session unavailable")
+    error = r.get("kn:youtube_oauth:error")
+    if error:
+        r.delete(oauth_bootstrap_state_key(), "kn:youtube_oauth:error")
+        raise HTTPException(422, error)
+    refresh_token = r.get("kn:youtube_oauth:result")
+    if not refresh_token:
+        return Response(status_code=202)
+    r.delete(oauth_bootstrap_state_key(), "kn:youtube_oauth:result", "kn:youtube_oauth:status")
+    return HTMLResponse(f"<p id='refresh-token'>{refresh_token}</p>")
 
 @app.get("/health")
 def health():
