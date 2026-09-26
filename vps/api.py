@@ -2,7 +2,7 @@ from __future__ import annotations
 import base64, hashlib, hmac, json, os, re, subprocess, tempfile, time, uuid
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from redis import Redis
 from .config import API_TOKEN, REDIS_URL, OUTPUTS, ALLOWED_CALLBACK_URL, YOUTUBE_DATA_API_KEY, YOUTUBE_TREND_REGION
@@ -18,6 +18,30 @@ _public_probe_requests: dict[str, list[float]] = {}
 _MISSING_PROBE_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlP2r8AAAAASUVORK5CYII="
 )
+
+_LEGAL_STYLE = """
+<style>
+body{margin:0;background:#0a0d11;color:#eef2f7;font-family:Arial,sans-serif;line-height:1.65}
+main{max-width:760px;margin:0 auto;padding:72px 24px}h1{font-size:clamp(2rem,6vw,3.6rem);line-height:1.05;margin:0 0 24px}
+h2{margin-top:42px;color:#ff6b21}a{color:#ff8a4b}p,li{color:#c9d1da}.eyebrow{color:#ff6b21;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+footer{margin-top:64px;border-top:1px solid #29313b;padding-top:20px;font-size:.9rem}
+</style>
+"""
+
+def legal_page(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(f"<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{title} | Knowledge Nuggets</title>{_LEGAL_STYLE}</head><body><main><p class='eyebrow'>Knowledge Nuggets</p><h1>{title}</h1>{body}<footer><a href='/'>Home</a> &nbsp; <a href='/privacy'>Privacy</a> &nbsp; <a href='/terms'>Terms</a><br>Contact: <a href='mailto:knowledge.nuggets1221@gmail.com'>knowledge.nuggets1221@gmail.com</a></footer></main></body></html>")
+
+@app.get("/", include_in_schema=False)
+def public_home():
+    return legal_page("Knowledge Nuggets", "<p>Knowledge Nuggets produces short, fact-led educational videos. The production system creates and publishes videos privately to the channel authorized by its owner.</p><p>It is a private creator tool, not a public sign-up service.</p>")
+
+@app.get("/privacy", include_in_schema=False)
+def privacy_policy():
+    return legal_page("Privacy Policy", "<p>Last updated: September 26, 2026.</p><h2>What this tool accesses</h2><p>Knowledge Nuggets uses the YouTube upload permission only after the channel owner grants it through Google. This permission is used solely to upload videos as private videos to the authorized YouTube channel.</p><h2>Data handling</h2><p>The system processes video files, production metadata and the OAuth credentials required for that upload. Credentials are stored as protected production configuration and are not sold, shared or used to access unrelated Google services.</p><h2>Retention and deletion</h2><p>The channel owner may revoke access at any time in their Google Account or request deletion of production data by contacting us. Revoking access prevents future uploads.</p><h2>Contact</h2><p>Questions about privacy can be sent to the contact address below.</p>")
+
+@app.get("/terms", include_in_schema=False)
+def terms_of_service():
+    return legal_page("Terms of Service", "<p>Last updated: September 26, 2026.</p><h2>Purpose</h2><p>Knowledge Nuggets is a private production tool for creating educational short-form videos and uploading them privately to the channel selected by its owner.</p><h2>Authorized use</h2><p>The channel owner is responsible for the factual accuracy of published material, the rights to all assets and compliance with YouTube policies. The tool may only be connected to channels for which the owner has granted authorization.</p><h2>Availability</h2><p>The service may be updated, paused or improved to maintain production quality and security.</p><h2>Contact</h2><p>Questions about these terms can be sent to the contact address below.</p>")
 
 class Job(BaseModel):
     content_id: str = Field(min_length=1,max_length=120)
