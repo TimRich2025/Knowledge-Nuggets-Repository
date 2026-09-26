@@ -166,11 +166,10 @@ def youtube_oauth_result(state: str):
     if error:
         r.delete(oauth_bootstrap_state_key(), "kn:youtube_oauth:error")
         raise HTTPException(422, error)
-    refresh_token = r.get("kn:youtube_oauth:result")
-    if not refresh_token:
+    if r.get("kn:youtube_oauth:status") != "READY":
         return Response(status_code=202)
-    r.delete(oauth_bootstrap_state_key(), "kn:youtube_oauth:result", "kn:youtube_oauth:status")
-    return HTMLResponse(f"<p id='refresh-token'>{refresh_token}</p>")
+    r.delete(oauth_bootstrap_state_key(), "kn:youtube_oauth:status")
+    return HTMLResponse("<p id='ready'>Private YouTube publishing is connected.</p>")
 
 @app.get("/health")
 def health():

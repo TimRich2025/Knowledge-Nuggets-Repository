@@ -32,14 +32,15 @@ def _oauth_client_fields() -> dict[str, str]:
     return fields
 
 
-def _access_token() -> str:
-    if not YOUTUBE_OAUTH_REFRESH_TOKEN:
+def _access_token(refresh_token: str | None = None) -> str:
+    refresh_token = refresh_token or YOUTUBE_OAUTH_REFRESH_TOKEN
+    if not refresh_token:
         raise YouTubePublishError(
             "private YouTube publishing is not configured: set KN_YOUTUBE_OAUTH_CLIENT_ID and KN_YOUTUBE_OAUTH_REFRESH_TOKEN"
         )
     try:
         payload = _oauth_client_fields() | {
-            "refresh_token": YOUTUBE_OAUTH_REFRESH_TOKEN,
+            "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         }
         response = requests.post(
@@ -76,7 +77,12 @@ def exchange_authorization_code(code: str, redirect_uri: str) -> str:
     return refresh_token
 
 
-def publish_private_short(video_path: Path, title: str, description: str) -> dict[str, Any]:
+def publish_private_short(
+    video_path: Path,
+    title: str,
+    description: str,
+    refresh_token: str | None = None,
+) -> dict[str, Any]:
     """Upload an MP4 as a private video and return its immutable video id.
 
     The privacy field is intentionally hard-coded. This worker has no public or
@@ -87,7 +93,7 @@ def publish_private_short(video_path: Path, title: str, description: str) -> dic
         raise YouTubePublishError("rendered preview is missing before YouTube upload")
     if not title or not description.startswith(title) or len(title) > 100:
         raise YouTubePublishError("title must be at most 100 characters and start the description exactly")
-    token = _access_token()
+    token = _access_token(refresh_token)
     metadata = {
         "snippet": {
             "title": title,

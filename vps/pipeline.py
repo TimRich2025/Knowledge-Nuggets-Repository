@@ -15,7 +15,7 @@ def callback(job: dict, payload: dict):
     if CALLBACK_TOKEN: headers["Authorization"]=f"Bearer {CALLBACK_TOKEN}"
     requests.post(url,json=payload,headers=headers,timeout=30).raise_for_status()
 
-def process(job: dict, work_dir: Path) -> dict:
+def process(job: dict, work_dir: Path, youtube_refresh_token: str | None = None) -> dict:
     started=time.time()
     # Phase A may use the network. It must finish completely before rendering starts.
     ingested=ingest_job(job)
@@ -41,7 +41,12 @@ def process(job: dict, work_dir: Path) -> dict:
             str(scene.get("spoken_phrase") or "") for scene in job.get("scenes") or []
         )).strip()
         metadata = build_social_metadata(topic, fact_statement)
-        result["youtube"] = publish_private_short(final_preview, metadata["title"], metadata["description"])
+        result["youtube"] = publish_private_short(
+            final_preview,
+            metadata["title"],
+            metadata["description"],
+            youtube_refresh_token,
+        )
     else:
         result["youtube"] = {"status": "DISABLED"}
     (final_dir/"result.json").write_text(json.dumps(result,indent=2),encoding="utf-8")
