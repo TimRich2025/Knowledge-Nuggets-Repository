@@ -272,8 +272,23 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
             if not valid:
                 rebuilt.append(index)
                 run(cmd,300)
+        # Stream copy is fast but carries each segment's timestamps through
+        # unchanged, and with many segments two frames eventually collide:
+        # "Non-monotonic DTS", and the MP4 muxer refuses the packet. Re-encoding
+        # rewrites the whole timeline, so fall back to it once copy has failed.
+        if attempt == 0:
+            join=["ffmpeg","-hide_banner","-loglevel","error","-xerror","-y","-fflags","+genpts",
+                  "-f","concat","-safe","0","-i",str(concat),
+                  "-c","copy","-avoid_negative_ts","make_zero",str(lower)]
+            join_timeout=120
+        else:
+            join=["ffmpeg","-hide_banner","-loglevel","error","-y",
+                  "-f","concat","-safe","0","-i",str(concat),
+                  "-c:v","libx264","-threads","2","-preset","veryfast","-crf","17",
+                  "-pix_fmt","yuv420p","-fps_mode","cfr","-r","30",str(lower)]
+            join_timeout=420
         try:
-            run(["ffmpeg","-hide_banner","-loglevel","error","-xerror","-y","-f","concat","-safe","0","-i",str(concat),"-c","copy",str(lower)],120)
+            run(join,join_timeout)
             lower_duration=probe_duration(lower)
             expected=sum(durations)
             if abs(lower_duration-expected)<=concat_duration_tolerance(len(durations)):
