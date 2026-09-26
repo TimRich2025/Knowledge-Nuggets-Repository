@@ -3,7 +3,7 @@ import json, re, subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
 from layout_lock import build_header, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H, HEADER_H
-from .production_contract import validate_measured_render_contract, validate_submission_contract
+from .production_contract import concat_duration_tolerance, validate_measured_render_contract, validate_submission_contract
 
 class RenderError(RuntimeError): pass
 
@@ -270,7 +270,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         try:
             run(["ffmpeg","-hide_banner","-loglevel","error","-xerror","-y","-f","concat","-safe","0","-i",str(concat),"-c","copy",str(lower)],120)
             lower_duration=probe_duration(lower)
-            if abs(lower_duration-sum(durations))<=0.12:
+            if abs(lower_duration-sum(durations))<=concat_duration_tolerance(len(durations)):
                 break
         except RenderError:
             pass

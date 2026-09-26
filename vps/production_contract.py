@@ -13,6 +13,8 @@ MAX_SHOT_SECONDS = 2.4
 MIN_SHOT_SECONDS = 0.6
 # The shortest source window the ingest can cut a usable segment from.
 MIN_SOURCE_SHOT_SECONDS = 1.5
+# How far one encoded segment may miss its target duration.
+SEGMENT_DURATION_TOLERANCE = 0.08
 # An interval written as exactly 2.4s measures 2.4000000000000004 in binary
 # floating point.  Every bound check shares this tolerance so a value at the
 # documented limit is accepted everywhere, not only by whichever check is
@@ -32,6 +34,18 @@ def _words(value: object) -> list[str]:
 
 def _fail(scene_number: int | str, message: str) -> ValueError:
     return ValueError(f"scene {scene_number}: {message}")
+
+
+def concat_duration_tolerance(scene_count: int) -> float:
+    """How far the joined track may drift from the sum of its scenes.
+
+    Each encoded segment is allowed to miss its own target by up to
+    SEGMENT_DURATION_TOLERANCE, so the drift of the joined track grows with the
+    number of scenes.  A fixed allowance sized for a six-scene Short rejects a
+    perfectly good eighteen-scene one.  The result still stays below half the
+    shortest possible scene, so a genuinely dropped scene is always caught.
+    """
+    return min(MIN_SHOT_SECONDS / 2, max(0.12, 0.02 * max(1, scene_count)))
 
 
 def source_window_error(length: float) -> str | None:
