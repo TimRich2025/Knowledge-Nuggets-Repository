@@ -15,6 +15,9 @@ MIN_SHOT_SECONDS = 0.6
 MIN_SOURCE_SHOT_SECONDS = 1.5
 # How far one encoded segment may miss its target duration.
 SEGMENT_DURATION_TOLERANCE = 0.08
+# The renderer's fixed output frame rate; one frame is the smallest cut a
+# segment boundary can land on.
+TIMELINE_FPS = 30.0
 # An interval written as exactly 2.4s measures 2.4000000000000004 in binary
 # floating point.  Every bound check shares this tolerance so a value at the
 # documented limit is accepted everywhere, not only by whichever check is
@@ -36,16 +39,21 @@ def _fail(scene_number: int | str, message: str) -> ValueError:
     return ValueError(f"scene {scene_number}: {message}")
 
 
-def concat_duration_tolerance(scene_count: int) -> float:
+def concat_duration_tolerance(durations: list[float]) -> float:
     """How far the joined track may drift from the sum of its scenes.
 
-    Each encoded segment is allowed to miss its own target by up to
-    SEGMENT_DURATION_TOLERANCE, so the drift of the joined track grows with the
-    number of scenes.  A fixed allowance sized for a six-scene Short rejects a
-    perfectly good eighteen-scene one.  The result still stays below half the
-    shortest possible scene, so a genuinely dropped scene is always caught.
+    Every segment's length is rounded to whole frames twice, once when it is
+    cut and once when the track is joined, so the drift grows with the number
+    of scenes.  Budget a frame per scene.  The allowance is then held below
+    half the SHORTEST SCENE ACTUALLY PRESENT, not below the theoretical
+    minimum, so a dropped scene can never hide inside it while ordinary
+    rounding still passes.
     """
-    return min(MIN_SHOT_SECONDS / 2, max(0.12, 0.02 * max(1, scene_count)))
+    scenes = [float(value) for value in durations if float(value) > 0]
+    if not scenes:
+        return 0.12
+    frame_budget = max(0.12, len(scenes) / TIMELINE_FPS)
+    return min(frame_budget, 0.5 * min(scenes))
 
 
 def source_window_error(length: float) -> str | None:

@@ -291,11 +291,11 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
             run(join,join_timeout)
             lower_duration=probe_duration(lower)
             expected=sum(durations)
-            if abs(lower_duration-expected)<=concat_duration_tolerance(len(durations)):
+            if abs(lower_duration-expected)<=concat_duration_tolerance(durations):
                 break
             last_reason=(f"joined {lower_duration:.3f}s instead of {expected:.3f}s "
                          f"over {len(durations)} scenes, allowed drift "
-                         f"{concat_duration_tolerance(len(durations)):.3f}s")
+                         f"{concat_duration_tolerance(durations):.3f}s")
         except RenderError as exc:
             last_reason=str(exc)
         if rebuilt:
