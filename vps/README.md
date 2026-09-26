@@ -9,7 +9,8 @@ This replaces GitHub Actions as the production runtime. GitHub stores code only;
 3. Rendering starts only after all required assets are local and verified.
 4. The renderer receives local filesystem paths only. A remote 429/5xx cannot interrupt an active render.
 5. The final frame is checked against `KN_LAYOUT_V1`; header MAE > 12 fails QC.
-6. Nothing publishes to YouTube. The result returns to Make via callback for review.
+6. After every production gate succeeds, the worker can publish the result to
+   YouTube only as `private`. A failed gate cannot produce an upload.
 
 ## Publish metadata contract
 
@@ -23,12 +24,11 @@ contains at most five relevant hashtags, including `#Shorts`.
 ## Unattended private publishing
 
 After a render passes every production gate, the worker uploads it directly to
-YouTube as `private`. It never has a public or unlisted code path. Set
-`KN_YOUTUBE_UPLOAD_ENABLED=true` and the three `KN_YOUTUBE_OAUTH_*` variables
-once in the deployment. The refresh token must have the YouTube upload scope;
-the worker refreshes access tokens itself for every run. A missing or invalid
-OAuth configuration fails the job rather than silently leaving a finished
-video unpublished.
+YouTube as `private`. It never has a public or unlisted code path. The OAuth
+credential has the YouTube upload scope and remains only in the protected
+production Redis store. The worker refreshes access tokens itself for every
+run. A missing or invalid OAuth configuration fails the job rather than
+silently leaving a finished video unpublished.
 
 Set `KN_YOUTUBE_DATA_API_KEY` on the worker to live-rank topic-related hashtags
 from recent high-view YouTube Shorts. Set `KN_YOUTUBE_TREND_REGION` if the
@@ -53,6 +53,8 @@ Expose port 8080 through HTTPS before connecting Make. Do not expose the worker 
 - `content_id`
 - `production_status: READY`
 - `core_question_lines` (exactly two)
-- `audio_url`
-- `scenes[]` with `source_url`, optional `backup_download_urls`, `duration`, `layout_mode`, `caption_beats`, optional `validated_frame_time` and `source_start_offset`
+- `tts_provider: EDGE` with an approved natural male Edge voice and a natural
+  speaking rate
+- `scenes[]` with an official `source_url`, exact verified visual interval,
+  plain-language phrase and matching tight caption beats
 - optional `callback_url`

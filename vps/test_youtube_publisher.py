@@ -47,6 +47,18 @@ class YouTubePublisherTests(unittest.TestCase):
         self.assertEqual(_access_token(), "access")
         self.assertNotIn("client_secret", post.call_args.kwargs["data"])
 
+    @patch("vps.youtube_publisher.YOUTUBE_OAUTH_REFRESH_TOKEN", "")
+    @patch("vps.youtube_publisher.YOUTUBE_OAUTH_CLIENT_ID", "client")
+    @patch("vps.youtube_publisher.requests.post")
+    def test_refresh_uses_protected_runtime_credential(self, post) -> None:
+        token = Mock()
+        token.json.return_value = {"access_token": "access"}
+        token.raise_for_status.return_value = None
+        post.return_value = token
+        from .youtube_publisher import _access_token
+        self.assertEqual(_access_token("protected-production-token"), "access")
+        self.assertEqual(post.call_args.kwargs["data"]["refresh_token"], "protected-production-token")
+
     def test_rejects_metadata_that_cannot_be_paired(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             video = Path(temp) / "preview.mp4"
