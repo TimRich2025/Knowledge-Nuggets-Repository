@@ -7,6 +7,8 @@ on:
       - vps/source_cache.py
       - vps/edge_word_tts.py
       - vps/test_tts_command.py
+      - vps/production_contract.py
+      - vps/test_shot_bounds.py
       - vps/social_metadata.py
       - vps/test_social_metadata.py
       - vps/youtube_publisher.py
@@ -41,6 +43,7 @@ jobs:
         run: |
           python -m unittest vps.test_production_contract
           python -m unittest vps.test_tts_command
+          python -m unittest vps.test_shot_bounds
           python -m unittest vps.test_social_metadata
           python -m unittest vps.test_youtube_publisher
           python -m vps.tts_qc

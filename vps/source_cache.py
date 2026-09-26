@@ -9,7 +9,7 @@ from .config import CACHE, MAX_CACHE_GB
 from .visual_contract import validate_visual_contract
 from .production_contract import (
     NATURAL_MALE_EDGE_VOICES,
-    MAX_SHOT_SECONDS,
+    source_window_error,
     validate_measured_render_contract,
     validate_submission_contract,
 )
@@ -122,10 +122,9 @@ def ingest_video_segment(urls: list[str], shot_start: float, shot_end: float, po
     length=end-start
     fast_seek=max(0.0,start-2.0)
     accurate_seek=start-fast_seek
-    if length < 1.5:
-        raise IngestError("verified shot interval must be at least 1.5 seconds")
-    if length > MAX_SHOT_SECONDS:
-        raise IngestError(f"verified shot exceeds the {MAX_SHOT_SECONDS:.1f}s production limit")
+    window_error=source_window_error(length)
+    if window_error:
+        raise IngestError(window_error)
     for url in [u for u in urls if u]:
         key=hashlib.sha256(f"{url}|{start:.3f}|{end:.3f}|1080|accurate-seek-v2".encode()).hexdigest()
         dest=CACHE/f"{key}.mp4"; meta_path=CACHE/f"{key}.json"

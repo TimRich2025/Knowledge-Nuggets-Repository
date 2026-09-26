@@ -11,6 +11,13 @@ from typing import Any
 
 MAX_SHOT_SECONDS = 2.4
 MIN_SHOT_SECONDS = 0.6
+# The shortest source window the ingest can cut a usable segment from.
+MIN_SOURCE_SHOT_SECONDS = 1.5
+# An interval written as exactly 2.4s measures 2.4000000000000004 in binary
+# floating point.  Every bound check shares this tolerance so a value at the
+# documented limit is accepted everywhere, not only by whichever check is
+# written most loosely.
+SHOT_BOUND_TOLERANCE = 0.001
 MAX_WORDS_PER_EXPLANATION = 11
 MAX_WORDS_PER_CAPTION = 4
 NATURAL_MALE_EDGE_VOICES = {
@@ -25,6 +32,21 @@ def _words(value: object) -> list[str]:
 
 def _fail(scene_number: int | str, message: str) -> ValueError:
     return ValueError(f"scene {scene_number}: {message}")
+
+
+def source_window_error(length: float) -> str | None:
+    """Return why a source window is unusable, or None when it is fine.
+
+    The ingest cuts the approved window before rendering, so it needs a longer
+    span than a single spoken beat does.  Both bounds carry the shared
+    tolerance, otherwise an interval at the documented limit passes the
+    submission contract and is then rejected on ingest.
+    """
+    if length < MIN_SOURCE_SHOT_SECONDS - SHOT_BOUND_TOLERANCE:
+        return f"verified shot interval must be at least {MIN_SOURCE_SHOT_SECONDS:.1f} seconds"
+    if length > MAX_SHOT_SECONDS + SHOT_BOUND_TOLERANCE:
+        return f"verified shot exceeds the {MAX_SHOT_SECONDS:.1f}s production limit"
+    return None
 
 
 def validate_submission_contract(job: dict[str, Any]) -> None:
@@ -50,7 +72,7 @@ def validate_scene_contract(scene: dict[str, Any], number: int | str) -> None:
     phrase = str(scene.get("spoken_phrase") or "").strip()
     words = _words(phrase)
     shot_duration = float(scene.get("shot_end_seconds", 0)) - float(scene.get("shot_start_seconds", 0))
-    if shot_duration < MIN_SHOT_SECONDS - 0.001 or shot_duration > MAX_SHOT_SECONDS + 0.001:
+    if shot_duration < MIN_SHOT_SECONDS - SHOT_BOUND_TOLERANCE or shot_duration > MAX_SHOT_SECONDS + SHOT_BOUND_TOLERANCE:
         raise _fail(number, f"verified shot must be between {MIN_SHOT_SECONDS:.1f}s and {MAX_SHOT_SECONDS:.1f}s")
     if scene.get("plain_language") is not True:
         raise _fail(number, "plain_language must be true")
@@ -81,7 +103,7 @@ def validate_measured_render_contract(scenes: list[dict[str, Any]]) -> None:
         except (KeyError, TypeError, ValueError) as exc:
             raise _fail(number, "measured speech interval is required") from exc
         duration = speech_end - speech_start
-        if duration < MIN_SHOT_SECONDS - 0.001 or duration > MAX_SHOT_SECONDS + 0.001:
+        if duration < MIN_SHOT_SECONDS - SHOT_BOUND_TOLERANCE or duration > MAX_SHOT_SECONDS + SHOT_BOUND_TOLERANCE:
             raise _fail(number, f"measured speech beat must be between {MIN_SHOT_SECONDS:.1f}s and {MAX_SHOT_SECONDS:.1f}s")
         timings = scene.get("caption_timings")
         if not isinstance(timings, list) or not timings:
