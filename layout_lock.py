@@ -53,6 +53,7 @@ CAPTION_SIZE=66
 CAPTION_LINE_STEP=84
 CAPTION_CENTRE_Y=round(HEADER_H+0.58*(LOGO_Y-HEADER_H))
 CAPTION_MAX_W=CANVAS_W-2*CAPTION_MARGIN
+CAPTION_WORD_SPACE=1.0
 
 def _tracked_text(draw, xy, text, font, fill, tracking):
     widths=[draw.textlength(ch,font=font) for ch in text]
@@ -140,7 +141,9 @@ def caption_layout(words):
     """
     font=ImageFont.truetype(CAPTION_FONT,CAPTION_SIZE)
     probe=ImageDraw.Draw(Image.new('RGB',(1,1)))
-    gap=probe.textlength(' ',font=font)*1.6
+    # A natural word space. The 6px caption outline already adds visual
+    # separation, so anything wider reads as words drifting apart.
+    gap=probe.textlength(' ',font=font)*CAPTION_WORD_SPACE
     widths=[probe.textlength(word,font=font) for word in words]
 
     lines=[]
