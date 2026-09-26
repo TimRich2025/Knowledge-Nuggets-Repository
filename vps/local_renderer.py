@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, re, subprocess
+import json, re, shutil, subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
 from layout_lock import build_header, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H, HEADER_H
@@ -259,23 +259,36 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     lower=job_dir/"lower.mp4"
     # A damaged intermediate can make FFmpeg concat exit successfully after
     # only the first scene. Verify the full track and retry damaged segments.
+    # Whatever goes wrong here used to be swallowed by the retry loop, leaving a
+    # message that named no cause.  Keep the last real reason and report it.
+    last_reason="no attempt completed"
     for attempt in range(3):
-        for seg,(cmd,dur) in zip(segments,segment_commands):
+        rebuilt=[]
+        for index,(seg,(cmd,dur)) in enumerate(zip(segments,segment_commands),1):
             try:
                 valid=seg.stat().st_size>=32_000 and abs(probe_duration(seg)-dur)<=0.08
             except (OSError,ValueError,RenderError):
                 valid=False
             if not valid:
+                rebuilt.append(index)
                 run(cmd,300)
         try:
             run(["ffmpeg","-hide_banner","-loglevel","error","-xerror","-y","-f","concat","-safe","0","-i",str(concat),"-c","copy",str(lower)],120)
             lower_duration=probe_duration(lower)
-            if abs(lower_duration-sum(durations))<=concat_duration_tolerance(len(durations)):
+            expected=sum(durations)
+            if abs(lower_duration-expected)<=concat_duration_tolerance(len(durations)):
                 break
-        except RenderError:
-            pass
+            last_reason=(f"joined {lower_duration:.3f}s instead of {expected:.3f}s "
+                         f"over {len(durations)} scenes, allowed drift "
+                         f"{concat_duration_tolerance(len(durations)):.3f}s")
+        except RenderError as exc:
+            last_reason=str(exc)
+        if rebuilt:
+            last_reason=f"{last_reason}; re-encoded scenes {rebuilt}"
     else:
-        raise RenderError("concatenated visual track lost scenes after three attempts")
+        free_mb=shutil.disk_usage(job_dir).free//(1024*1024)
+        raise RenderError("concatenated visual track lost scenes after three attempts: "
+                          f"{last_reason}; {free_mb}MB free on the render volume")
     out=job_dir/"preview.mp4"
     fc=(f"[0:v]crop={CANVAS_W}:{VIDEO_H}:0:0[lower];[lower]pad={CANVAS_W}:{CANVAS_H}:0:{VIDEO_Y}:color=black[base];"
         f"[base][1:v]overlay=0:0:eof_action=repeat:repeatlast=1[locked];[locked]ass={ass.as_posix()}[v]")
