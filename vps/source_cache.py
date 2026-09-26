@@ -229,6 +229,18 @@ def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+",text.lower())
 
 
+def build_tts_command(voice: str, rate: str, phrase: str, media: Path, subtitles: Path) -> list[str]:
+    """Build the neural-TTS call so leading-hyphen values survive argparse.
+
+    A natural rate such as "-3%" begins with a hyphen.  Passed as a separate
+    argv entry, argparse reads it as another option and the job dies before a
+    single word is spoken.  The "--opt=value" form keeps the value intact.
+    """
+    return [sys.executable, "-m", "vps.edge_word_tts",
+            f"--voice={voice}", f"--rate={rate}", f"--text={phrase}",
+            "--write-media", str(media), "--write-subtitles", str(subtitles)]
+
+
 def _caption_timings(scene: dict, cues: list[dict], duration: float) -> list[dict]:
     words=[]
     for cue in cues:
@@ -285,8 +297,7 @@ def synthesize_edge_scene_audio(
             if not phrase:
                 raise IngestError(f"scene {index}: spoken_phrase required for neural TTS")
             media=tmp/f"scene-{index:02d}.mp3"; subtitles=tmp/f"scene-{index:02d}.srt"
-            command=[sys.executable,"-m","vps.edge_word_tts","--voice",voice,"--rate",rate,"--text",phrase,
-                     "--write-media",str(media),"--write-subtitles",str(subtitles)]
+            command=build_tts_command(voice,rate,phrase,media,subtitles)
             errors=[]
             for attempt in range(1,4):
                 result=subprocess.run(command,capture_output=True,text=True,timeout=90)

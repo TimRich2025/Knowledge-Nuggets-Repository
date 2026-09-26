@@ -22,14 +22,18 @@ async def synthesize(text: str, voice: str, rate: str, media: Path, subtitles: P
     subtitles.write_text(cues.get_srt(), encoding="utf-8")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--text", required=True)
     parser.add_argument("--voice", required=True)
     parser.add_argument("--rate", required=True)
     parser.add_argument("--write-media", type=Path, required=True)
     parser.add_argument("--write-subtitles", type=Path, required=True)
-    options = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    options = build_parser().parse_args()
     asyncio.run(synthesize(options.text, options.voice, options.rate,
                            options.write_media, options.write_subtitles))
 
