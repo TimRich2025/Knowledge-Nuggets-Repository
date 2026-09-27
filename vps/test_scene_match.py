@@ -218,3 +218,45 @@ class ContactSheetTests(unittest.TestCase):
         sources = [{"candidate_id": f"A{n}", "direct_download_url": f"https://x/{n}.mp4",
                     "measured_duration_seconds": 36.0} for n in range(14)]
         self.assertEqual(len(describe_request(sources, "https://w.app")), MAX_DESCRIBED_WORKS)
+
+
+class ObservationMergeTests(unittest.TestCase):
+    """A model writes descriptions. Every URL and number stays server-side."""
+
+    def _described(self):
+        from .source_pool import describe_request
+        return describe_request([{"candidate_id": "A", "title": "Launch",
+                                  "direct_download_url": "https://images-assets.nasa.gov/video/A/A~orig.mp4",
+                                  "selected_asset_page_url": "https://images.nasa.gov/details/A",
+                                  "width": 1920, "height": 1080,
+                                  "measured_duration_seconds": 36.0}], "https://worker.app")
+
+    def test_a_description_lands_on_the_right_frame(self) -> None:
+        from .source_pool import merge_observations
+        merged = merge_observations(self._described(), [
+            {"candidate_id": "A", "frames": [{"index": 3, "describes": "a rocket at the pad"}]}])
+        described = {frame["index"]: frame["describes"] for frame in merged[0]["frames"]}
+        self.assertEqual(described[3], "a rocket at the pad")
+        self.assertEqual(described[1], "")
+
+    def test_the_urls_come_from_the_server_not_the_observation(self) -> None:
+        from .source_pool import merge_observations
+        merged = merge_observations(self._described(), [
+            {"candidate_id": "A", "frames": [{"index": 1, "describes": "sky"}]}])
+        self.assertEqual(merged[0]["direct_download_url"],
+                         "https://images-assets.nasa.gov/video/A/A~orig.mp4")
+        self.assertEqual(merged[0]["measured_duration_seconds"], 36.0)
+
+    def test_an_observation_for_an_unknown_work_is_ignored(self) -> None:
+        from .source_pool import merge_observations
+        merged = merge_observations(self._described(), [
+            {"candidate_id": "GHOST", "frames": [{"index": 1, "describes": "invented"}]}])
+        self.assertTrue(all(frame["describes"] == "" for frame in merged[0]["frames"]))
+
+    def test_the_vision_note_says_which_image_is_which_clip(self) -> None:
+        from .source_pool import vision_payload
+        payload = vision_payload(self._described())
+        self.assertEqual(len(payload["vision_images"]), 1)
+        self.assertEqual(payload["vision_images"][0]["imageUploadType"], "url")
+        self.assertIn("IMAGE 1: work A", payload["vision_context"])
+        self.assertIn("1=0.0s", payload["vision_context"])

@@ -19,3 +19,4 @@ continuous-narration-v1
 brand-below-description-v1
 observed-footage-matching-v1
 contact-sheet-samples-v1
+pool-id-observations-v1

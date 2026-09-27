@@ -12,11 +12,15 @@ from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
 from .source_pool import (SourcePoolError, build_source_pool, collect_sources,
-                          describe_request, plan_from_observations, probe_stream)
+                          describe_request, merge_observations,
+                          plan_from_observations, probe_stream, vision_payload)
 from .scene_match import MATCH_FLOOR
 from .social_metadata import MetadataError, build_social_metadata
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
+# Long enough for a vision pass and a retry, short enough that a forgotten pool
+# does not sit in Redis for a day.
+POOL_TTL_SECONDS=3600
 _public_probe_requests: dict[str, list[float]] = {}
 _MISSING_PROBE_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlP2r8AAAAASUVORK5CYII="
@@ -105,9 +109,22 @@ class BeatRequirement(BaseModel):
     spoken_phrase: str = Field(default="", max_length=600)
     must_show: list[str] = Field(default_factory=list, max_length=12)
 
+class FrameObservation(BaseModel):
+    index: int = Field(ge=1, le=64)
+    describes: str = Field(default="", max_length=2000)
+
+class WorkObservation(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=200)
+    frames: list[FrameObservation] = Field(default_factory=list, max_length=64)
+
 class SourcePlanRequest(BaseModel):
     beats: list[BeatRequirement] = Field(min_length=1, max_length=40)
-    works: list[ObservedWork] = Field(min_length=1, max_length=40)
+    # Either the pool this plan belongs to, or the works spelled out in full.
+    # The pool id is the normal path: it keeps every URL and measured number on
+    # this side, so no model can mistype one into a job.
+    pool_id: str = Field(default="", max_length=64)
+    observations: list[WorkObservation] = Field(default_factory=list, max_length=40)
+    works: list[ObservedWork] = Field(default_factory=list, max_length=40)
     window_seconds: float = Field(default=3.2, ge=1.5, le=4.0)
     match_floor: float = Field(default=MATCH_FLOOR, ge=0.1, le=0.9)
     callback_url: str | None = None
@@ -298,9 +315,15 @@ def source_pool_candidates(payload: SourcePoolRequest, request: Request,
         raise HTTPException(422, str(exc))
     except SourceCatalogError as exc:
         raise HTTPException(502, str(exc))
-    return {"sources": describe_request(sources, public_base_url(request)),
+    described = describe_request(sources, public_base_url(request))
+    pool_id = uuid.uuid4().hex
+    try:
+        db().setex(f"kn:pool:{pool_id}", POOL_TTL_SECONDS, json.dumps(described))
+    except HTTPException:
+        pool_id = ""
+    return {"pool_id": pool_id, "sources": described, **vision_payload(described),
             "frame_policy": ("Each frame's at_seconds is its real position in the clip. "
-                             "Describe what is visible in that frame only, in plain nouns.")}
+                             "Describe what is visible in that tile only, in plain nouns.")}
 
 @app.post("/source-pool/plan")
 def source_pool_plan(payload: SourcePlanRequest, request: Request,
@@ -308,10 +331,18 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
     """Pair every beat with footage that was seen to contain what it needs."""
     if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
         auth(authorization)
+    works = [work.model_dump() for work in payload.works]
+    if payload.pool_id:
+        stored = db().get(f"kn:pool:{safe_id(payload.pool_id)}")
+        if not stored:
+            raise HTTPException(409, "that source pool has expired; discover the works again")
+        works = merge_observations(json.loads(stored),
+                                   [entry.model_dump() for entry in payload.observations])
+    if not works:
+        raise HTTPException(422, "supply either a pool_id with observations, or works in full")
     try:
         return plan_from_observations(
-            [beat.model_dump() for beat in payload.beats],
-            [work.model_dump() for work in payload.works],
+            [beat.model_dump() for beat in payload.beats], works,
             window_seconds=payload.window_seconds,
             match_floor=payload.match_floor)
     except (SourcePoolError, ValueError) as exc:

@@ -548,6 +548,24 @@ def sheet_frames(duration: float) -> list[dict[str, Any]]:
             for index in range(count)]
 
 
+def vision_payload(described: list[dict[str, Any]]) -> dict[str, Any]:
+    """The images to look at and the note saying what each one is.
+
+    Shaped exactly as the vision module expects, so nothing downstream has to
+    rebuild an array of objects out of a list of strings.
+    """
+    images = [{"imageUploadType": "url", "imageUrl": work["contact_sheet_url"]}
+              for work in described]
+    lines = []
+    for position, work in enumerate(described, 1):
+        seconds = ", ".join(f"{frame['index']}={frame['at_seconds']:.1f}s"
+                            for frame in work["frames"])
+        lines.append(f"IMAGE {position}: work {work['candidate_id']}, titled "
+                     f"\"{work.get('title', '')}\". Its tiles read left to right, "
+                     f"top to bottom, at these seconds of the clip: {seconds}.")
+    return {"vision_images": images, "vision_context": "\n".join(lines)}
+
+
 def describe_request(sources: list[dict[str, Any]], base_url: str) -> list[dict[str, Any]]:
     """Each discovered work with the picture evidence needed to judge it."""
     described = []
@@ -562,6 +580,34 @@ def describe_request(sources: list[dict[str, Any]], base_url: str) -> list[dict[
                           "contact_sheet_url": f"{base_url.rstrip('/')}/source-probes/contact-sheet.jpg?{query}",
                           "frames": frames})
     return described
+
+
+def merge_observations(works: list[dict[str, Any]],
+                       observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach what was seen to the works the server already holds.
+
+    The vision pass returns descriptions and a work id, nothing else. Every URL,
+    dimension and measured length stays on this side, so a model can no longer
+    mistype one of them into a job.
+    """
+    seen_by_id: dict[str, dict[int, str]] = {}
+    for entry in observations:
+        asset = str(entry.get("candidate_id") or "").strip()
+        if not asset:
+            continue
+        frames = seen_by_id.setdefault(asset, {})
+        for frame in entry.get("frames") or []:
+            try:
+                frames[int(frame["index"])] = str(frame.get("describes") or "")
+            except (KeyError, TypeError, ValueError):
+                continue
+    merged = []
+    for work in works:
+        described = seen_by_id.get(work["candidate_id"], {})
+        merged.append({**work,
+                       "frames": [{**frame, "describes": described.get(frame["index"], "")}
+                                  for frame in work.get("frames") or []]})
+    return merged
 
 
 def plan_from_observations(
