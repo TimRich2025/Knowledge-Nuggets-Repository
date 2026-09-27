@@ -11,7 +11,7 @@ from .production_contract import validate_submission_contract
 from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
-from .source_pool import (SourcePoolError, build_source_pool, collect_sources,
+from .source_pool import (SourcePoolError, UnmatchedBeats, build_source_pool, collect_sources,
                           describe_request, merge_observations,
                           loads_tolerant, plan_from_observations, probe_stream,
                           vision_payload)
@@ -370,6 +370,12 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
             beats, works,
             window_seconds=payload.window_seconds,
             match_floor=payload.match_floor)
+    except UnmatchedBeats as exc:
+        # 409, not 422: the request was well formed and the footage simply does
+        # not show what these beats need. The caller can act on that by
+        # searching again, which the body tells it how to do.
+        raise HTTPException(409, {"detail": str(exc), "unmatched_beats": exc.unmatched,
+                                  "retry_queries": exc.retry_queries})
     except (SourcePoolError, ValueError) as exc:
         raise HTTPException(422, str(exc))
 

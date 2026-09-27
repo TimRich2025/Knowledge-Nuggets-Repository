@@ -184,6 +184,40 @@ def plan_by_content(
     }
 
 
+def suggested_queries(beats: list[dict[str, Any]], unmatched: list[int],
+                      limit: int = 4) -> list[str]:
+    """What to go looking for so the beats nothing matched can be served.
+
+    A failed match is only useful if it says what is missing, and what is
+    missing is written in the beats themselves. Their must_show entries are
+    already noun phrases, so they are trimmed to a searchable two words rather
+    than shredded into tokens and recombined: pairing the ranked words of
+    several unrelated beats produced "base control", which asks for nothing.
+    """
+    seen: Counter = Counter()
+    for position in unmatched:
+        if not 1 <= position <= len(beats):
+            continue
+        for phrase in beats[position - 1].get("must_show") or []:
+            words = [stem(word) for word in re.findall(r"[a-zA-Z][a-zA-Z']*", str(phrase).lower())
+                     if word not in STOPWORDS and word not in GENERIC_SUBJECTS and len(word) > 2]
+            if len(words) >= 2:
+                seen[" ".join(words[:2])] += 1
+            elif words:
+                seen[words[0]] += 1
+    # Sorted rather than most_common: a set's iteration order changes with the
+    # interpreter's hash seed, and a retry that differs run to run cannot be
+    # reasoned about.
+    ranked = sorted(seen.items(), key=lambda pair: (-pair[1], pair[0]))
+    return [phrase for phrase, _ in ranked[:limit]]
+
+
+# Words too broad to narrow a catalogue search on their own. They are still
+# scored against; they just make a poor query.
+GENERIC_SUBJECTS = frozenset({"vehicle", "hardware", "structure", "area", "place",
+                              "thing", "object", "system", "equipment", "surrounding"})
+
+
 def _neighbour_conflict(chosen, windows, position, source) -> bool:
     """True when taking this source would put too many neighbours together."""
     run = 1

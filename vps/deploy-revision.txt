@@ -21,3 +21,4 @@ observed-footage-matching-v1
 contact-sheet-samples-v1
 pool-id-observations-v1
 storyboard-sheets-v1
+retry-queries-v1

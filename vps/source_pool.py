@@ -23,7 +23,8 @@ from typing import Any, Callable
 from .production_contract import (MAX_CONSECUTIVE_SCENES_PER_SOURCE,
                                   MAX_SOURCE_SHARE, MIN_DISTINCT_SOURCES,
                                   scene_source_key, validate_source_diversity)
-from .scene_match import MATCH_FLOOR, plan_by_content, terms, window_terms
+from .scene_match import (MATCH_FLOOR, plan_by_content, suggested_queries, terms,
+                          window_terms)
 from .source_catalog import (SourceCatalogError, is_full_hd, probe_stream,
                              search_nasa_video_candidates)
 from .storyboard import StoryboardError, assumed_times, ensure_sheet
@@ -53,6 +54,20 @@ NASA_DETAILS_PAGE = "https://images.nasa.gov/details/"
 
 class SourcePoolError(RuntimeError):
     pass
+
+
+class UnmatchedBeats(SourcePoolError):
+    """Some beats had nothing to show, and here is what to go and find.
+
+    Raised rather than returned so no caller can mistake a half-filled plan for
+    a finished one, and carrying the search terms because a failure that does
+    not say what is missing costs a whole production run to diagnose.
+    """
+
+    def __init__(self, message: str, unmatched: list[int], retry_queries: list[str]) -> None:
+        super().__init__(message)
+        self.unmatched = unmatched
+        self.retry_queries = retry_queries
 
 
 def catalogue_page_url(candidate: dict[str, Any]) -> str:
@@ -666,10 +681,11 @@ def plan_from_observations(
     plan = result["plan"]
     required = min(MIN_DISTINCT_SOURCES, len(beats))
     if result["unmatched_beats"]:
-        raise SourcePoolError(
+        retry = suggested_queries(beats, result["unmatched_beats"])
+        raise UnmatchedBeats(
             f"no observed footage matches beats {result['unmatched_beats']}; every "
-            f"window scored below {match_floor}. Search for the subject those beats "
-            f"describe, or rewrite them to something the footage can show")
+            f"window scored below {match_floor}",
+            unmatched=result["unmatched_beats"], retry_queries=retry)
     if result["distinct_sources"] < required:
         raise SourcePoolError(
             f"the matching footage came from only {result['distinct_sources']} works, "

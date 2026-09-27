@@ -312,3 +312,48 @@ class ToleranceTests(unittest.TestCase):
         from .source_pool import loads_tolerant
         for value in ("not json", "", None, "{{broken}}"):
             self.assertEqual(loads_tolerant(value), [])
+
+
+class RetrySuggestionTests(unittest.TestCase):
+    """A failed match is only useful if it says what is missing."""
+
+    BEATS = [{"must_show": ["hold down hardware", "rocket base", "launch platform"]},
+             {"must_show": ["restraint arms", "rocket base"]},
+             {"must_show": ["mission control room", "screens"]}]
+
+    def test_the_suggestions_are_the_beats_own_phrases(self) -> None:
+        """Recombining ranked tokens gave "base control", which asks for nothing."""
+        from .scene_match import suggested_queries
+        queries = suggested_queries(self.BEATS, [1, 2, 3])
+        self.assertIn("rocket base", queries)
+        self.assertIn("launch platform", queries)
+
+    def test_no_suggestion_is_longer_than_a_catalogue_can_take(self) -> None:
+        from .scene_match import suggested_queries
+        for query in suggested_queries(self.BEATS, [1, 2, 3]):
+            self.assertLessEqual(len(query.split()), 2, query)
+
+    def test_only_the_unmatched_beats_shape_the_search(self) -> None:
+        from .scene_match import suggested_queries
+        queries = suggested_queries(self.BEATS, [3])
+        self.assertIn("mission control", queries)
+        self.assertFalse(any("rocket" in query for query in queries), queries)
+
+    def test_the_same_failure_always_suggests_the_same_search(self) -> None:
+        """Requirements arrive as a set, whose order changes with the hash seed."""
+        from .scene_match import suggested_queries
+        first = suggested_queries(self.BEATS, [1, 2, 3])
+        self.assertEqual(first, suggested_queries(self.BEATS, [1, 2, 3]))
+        self.assertEqual(first, sorted(first, key=first.index))
+
+    def test_a_word_too_broad_to_search_on_is_left_out(self) -> None:
+        from .scene_match import suggested_queries
+        queries = suggested_queries([{"must_show": ["vehicle hardware", "clamp"]}], [1])
+        self.assertNotIn("vehicle", " ".join(queries))
+        self.assertIn("clamp", queries)
+
+    def test_the_failure_carries_the_beats_and_the_queries(self) -> None:
+        from .source_pool import UnmatchedBeats
+        error = UnmatchedBeats("nothing matched", unmatched=[4, 5], retry_queries=["rocket clamp"])
+        self.assertEqual(error.unmatched, [4, 5])
+        self.assertEqual(error.retry_queries, ["rocket clamp"])
