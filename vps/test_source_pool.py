@@ -27,17 +27,20 @@ def candidate(asset: str) -> dict:
 class FakeCatalogue:
     """Stands in for the NASA API so the rules can be tested without a network."""
 
-    def __init__(self, results: dict[str, list[str]], duration: float = 90.0) -> None:
+    def __init__(self, results: dict[str, list[str]], duration: float = 90.0,
+                 width: int = 1920, height: int = 1080) -> None:
         self.results = results
         self.duration = duration
+        self.width = width
+        self.height = height
         self.queries: list[str] = []
 
     def search(self, query: str, limit: int) -> list[dict]:
         self.queries.append(query)
         return [candidate(asset) for asset in self.results.get(query, [])][:limit]
 
-    def measure(self, url: str) -> float:
-        return self.duration
+    def measure(self, url: str) -> tuple[float, int, int]:
+        return self.duration, self.width, self.height
 
 
 SEGMENTS = [
@@ -91,18 +94,19 @@ class CatalogueDurationTests(unittest.TestCase):
         self.assertEqual(parse_catalogue_duration("unknown"), 0.0)
         self.assertEqual(parse_catalogue_duration(None), 0.0)
 
-    def test_a_published_length_is_preferred_over_a_header_read(self) -> None:
+    def test_published_figures_are_preferred_over_a_header_read(self) -> None:
         fake = FakeCatalogue(CATALOGUE)
         published = {**CATALOGUE}
         reads: list[str] = []
 
         def search(query, limit):
-            return [{**candidate(asset), "source_duration": "0:01:30"}
+            return [{**candidate(asset), "source_duration": "0:01:30",
+                     "source_width": 1920, "source_height": 1080}
                     for asset in published.get(query, [])][:limit]
 
         def measure(url):
             reads.append(url)
-            return 90.0
+            return 90.0, 1920, 1080
 
         build_source_pool(SEGMENTS, search=search, measure=measure)
         self.assertEqual(reads, [])
@@ -275,3 +279,66 @@ class WideningTests(unittest.TestCase):
                                  search=fake.search, measure=fake.measure)
         assets = [source["candidate_id"] for source in pool["sources"]]
         self.assertEqual(len(assets), len(set(assets)))
+
+
+class FullHdGateTests(unittest.TestCase):
+    """A 1630x1080 clip passed discovery once and failed the render. Never again."""
+
+    def test_a_clip_below_full_hd_is_not_offered(self) -> None:
+        from .source_pool import is_full_hd
+        self.assertFalse(is_full_hd(1630, 1080))
+        self.assertTrue(is_full_hd(1920, 1080))
+        self.assertTrue(is_full_hd(1080, 1920))
+        self.assertTrue(is_full_hd(3840, 2160))
+
+    def test_an_unmeasurable_clip_is_dropped_rather_than_assumed(self) -> None:
+        def search(query, limit):
+            return [{**candidate(asset), "source_width": 0, "source_height": 0}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        with self.assertRaises(SourcePoolError):
+            build_source_pool(SEGMENTS, search=search, measure=lambda url: (90.0, 0, 0))
+
+    def test_a_clip_the_catalogue_calls_sub_hd_is_never_probed(self) -> None:
+        reads: list[str] = []
+
+        def search(query, limit):
+            return [{**candidate(asset), "technical_status": "REJECT_BELOW_FHD"}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        def measure(url):
+            reads.append(url)
+            return 90.0, 1920, 1080
+
+        with self.assertRaises(SourcePoolError):
+            build_source_pool(SEGMENTS, search=search, measure=measure)
+        self.assertEqual(reads, [])
+
+    def test_a_catalogue_without_dimensions_is_measured(self) -> None:
+        """The failure came from a work whose metadata.json was missing."""
+        reads: list[str] = []
+
+        def search(query, limit):
+            return [{**candidate(asset), "source_width": 0, "source_height": 0,
+                     "technical_status": "UNVERIFIED_TECHNICAL_METADATA"}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        def measure(url):
+            reads.append(url)
+            return 90.0, 1920, 1080
+
+        pool = build_source_pool(SEGMENTS, search=search, measure=measure)
+        self.assertTrue(reads)
+        for source in pool["sources"]:
+            self.assertGreaterEqual(source["width"], 1920)
+
+    def test_the_measured_size_replaces_a_wrong_published_one(self) -> None:
+        def search(query, limit):
+            return [{**candidate(asset), "source_width": 0, "source_height": 0}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        def measure(url):
+            return 90.0, 3840, 2160
+
+        pool = build_source_pool(SEGMENTS, search=search, measure=measure)
+        self.assertTrue(all(source["width"] == 3840 for source in pool["sources"]))

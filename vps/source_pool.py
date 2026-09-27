@@ -89,21 +89,37 @@ def parse_catalogue_duration(value: object) -> float:
         return 0.0
 
 
-def probe_duration(url: str) -> float:
-    """Read a remote clip's real length from its header, never its metadata.
+def probe_stream(url: str) -> tuple[float, int, int]:
+    """Read a remote clip's real length and frame size from its own header.
 
-    The catalogue's own duration field is a free-text string and is sometimes
-    absent, so the only trustworthy number is the one the decoder reports.
+    The catalogue's duration is free text and its pixel dimensions are often
+    absent altogether, and a clip that turns out to be 1630x1080 fails the
+    renderer's Full HD gate after the whole job has been assembled. So where
+    the catalogue is silent, the decoder answers.
     """
     try:
         output = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height:format=duration",
              "-of", "json", "-timeout", "20000000", url],
             capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=True,
         ).stdout
-        return float(json.loads(output)["format"]["duration"])
-    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError):
-        return 0.0
+        payload = json.loads(output)
+        stream = (payload.get("streams") or [{}])[0]
+        return (float(payload.get("format", {}).get("duration") or 0),
+                int(stream.get("width") or 0), int(stream.get("height") or 0))
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError, IndexError):
+        return 0.0, 0, 0
+
+
+def probe_duration(url: str) -> float:
+    """The clip's length alone, for callers that do not need its frame size."""
+    return probe_stream(url)[0]
+
+
+def is_full_hd(width: int, height: int) -> bool:
+    """The renderer's own gate, applied here so a job is never built to fail it."""
+    return (width >= 1920 and height >= 1080) or (height >= 1920 and width >= 1080)
 
 
 def plan_windows(duration: float, count: int, window: float = DEFAULT_WINDOW_SECONDS) -> list[tuple[float, float]]:
@@ -132,8 +148,8 @@ def plan_windows(duration: float, count: int, window: float = DEFAULT_WINDOW_SEC
     return windows
 
 
-def _usable_source(candidate: dict[str, Any], duration: float, window: float) -> bool:
-    if candidate.get("technical_status") == "REJECT_BELOW_FHD":
+def _usable_source(width: int, height: int, duration: float, window: float) -> bool:
+    if not is_full_hd(width, height):
         return False
     return duration >= LEAD_IN_SECONDS + TAIL_SECONDS + window
 
@@ -143,7 +159,7 @@ def collect_sources(
     per_query: int,
     window: float,
     search: Callable[[str, int], list[dict[str, Any]]],
-    measure: Callable[[str], float],
+    measure: Callable[[str], tuple[float, int, int]],
     max_per_segment: int = MAX_SOURCES_PER_SEGMENT,
 ) -> list[dict[str, Any]]:
     """Discover and measure the works behind every query, keeping the order.
@@ -173,10 +189,19 @@ def collect_sources(
             direct = str(candidate.get("direct_download_url") or "")
             if not direct:
                 continue
-            # The published length costs nothing; reading the file's own header
+            if candidate.get("technical_status") == "REJECT_BELOW_FHD":
+                continue
+            # The published figures cost nothing; reading the file's own header
             # costs a network round trip, so it is the fallback, not the rule.
-            duration = parse_catalogue_duration(candidate.get("source_duration")) or measure(direct)
-            if not _usable_source(candidate, duration, window):
+            duration = parse_catalogue_duration(candidate.get("source_duration"))
+            width = int(candidate.get("source_width") or 0)
+            height = int(candidate.get("source_height") or 0)
+            if not duration or not is_full_hd(width, height):
+                measured_duration, measured_width, measured_height = measure(direct)
+                duration = duration or measured_duration
+                if measured_width and measured_height:
+                    width, height = measured_width, measured_height
+            if not _usable_source(width, height, duration, window):
                 continue
             seen.add(key)
             kept += 1
@@ -193,8 +218,8 @@ def collect_sources(
                 # later vision pass can look at the work before a beat claims
                 # what it shows.
                 "review_frame_urls": candidate.get("review_frame_urls") or [],
-                "width": candidate.get("source_width") or 1920,
-                "height": candidate.get("source_height") or 1080,
+                "width": width,
+                "height": height,
                 "measured_duration_seconds": round(duration, 2),
             })
     if not sources:
@@ -295,7 +320,7 @@ def build_source_pool(
     per_query: int = 5,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     search: Callable[[str, int], list[dict[str, Any]]] | None = None,
-    measure: Callable[[str], float] | None = None,
+    measure: Callable[[str], tuple[float, int, int]] | None = None,
     max_per_segment: int = MAX_SOURCES_PER_SEGMENT,
 ) -> dict[str, Any]:
     """Return a measured, contract-clean beat plan the writing model can dress."""
@@ -305,7 +330,7 @@ def build_source_pool(
     if beats < 1:
         raise SourcePoolError("the segments request no beats")
     search = search or search_nasa_video_candidates
-    measure = measure or probe_duration
+    measure = measure or probe_stream
     sources = collect_sources(segments, per_query, window_seconds, search, measure,
                               max_per_segment=max_per_segment)
     required = min(MIN_DISTINCT_SOURCES, beats)
