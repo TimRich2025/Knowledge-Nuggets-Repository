@@ -365,14 +365,15 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
     hands back their contact sheets, so the caller's next move is one more look
     rather than a fresh start.
 
-    The caller that drives this runs its second look whether or not it was
-    needed, because a linear flow cannot skip a step and carry on. So a call
-    that matched everything answers MATCHED and still offers something to look
-    at, the plan it produced is kept, and the second call is given that same
-    plan back: a pairing already made can never be unmade by a look that was
-    only taken for the sake of the flow. `final` says this is the last look
-    there will be, and then an unserved beat is a refusal rather than another
-    round.
+    Every call answers with a status the caller branches on. MATCHED carries
+    the plan and nothing else. LOOK_AGAIN carries the works the widening search
+    just found, with contact sheets to look at, and the caller comes back with
+    what it saw. `final` says this is the last look there will be, and then an
+    unserved beat is a refusal rather than another round.
+
+    A plan that matched is kept with its pool and handed back unchanged if the
+    same pool is asked again, so a second call can never unmake a pairing that
+    was already made.
     """
     if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
         auth(authorization)
@@ -444,11 +445,11 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
         raise HTTPException(422, str(exc))
 
     remember(plan=result)
-    if payload.final:
-        return {**result, "status": "MATCHED"}
-    # Something valid to look at, so the caller's unconditional second look is a
-    # well formed request. Its answer changes nothing: the plan above is kept.
-    return {**result, "status": "MATCHED", "second_look": vision_payload(works[:1])}
+    # No second_look here. The caller branches on this status and only looks
+    # again when told to, so a matched plan carries nothing extra: the manifest
+    # builder reads this answer verbatim and every key it must be told to
+    # ignore is a key it can misread.
+    return {**result, "status": "MATCHED"}
 
 @app.post("/social-metadata")
 def social_metadata(payload: SocialMetadata, authorization: str | None = Header(default=None)):

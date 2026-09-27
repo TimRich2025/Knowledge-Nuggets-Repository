@@ -81,12 +81,12 @@ class PlanRoundTests(unittest.TestCase):
         return self.client.post("/source-pool/plan", json=body,
                                 headers={"Authorization": "Bearer t"})
 
-    def test_a_matched_plan_comes_back_with_something_to_look_at(self) -> None:
-        """The caller's second look must be a well formed request even so."""
+    def test_a_matched_plan_carries_the_plan_and_nothing_else(self) -> None:
+        """The caller branches on the status and only looks again when told to."""
         self.given_plan({"beat_plan": [{"scene": 1}]})
         answer = self.ask().json()
         self.assertEqual(answer["status"], "MATCHED")
-        self.assertTrue(answer["second_look"]["gemini_parts"])
+        self.assertNotIn("second_look", answer)
 
     def test_the_second_call_is_given_the_first_call_s_plan_unchanged(self) -> None:
         """A pairing already made is never unmade by a look taken for form's sake."""
