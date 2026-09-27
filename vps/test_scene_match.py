@@ -502,3 +502,102 @@ class ObservationNamingTests(unittest.TestCase):
         """The plan can also be asked for with the works spelled out in full."""
         from .source_pool import name_observed_work
         self.assertEqual(name_observed_work({"candidate_id": "anything"}, []), "anything")
+
+
+class RequirementCountingTests(unittest.TestCase):
+    """A beat asks for things. Counting its words instead punished good briefs.
+
+    Measured on a live refusal: a beat whose must_show read "Stationary rocket",
+    "Launch pad or support structure" and "Engine activity or exhaust" became
+    nine required words, so footage of a rocket on a launch pad matched three of
+    nine and scored 0.25 against a floor of 0.34. It was turned down for showing
+    what was asked.
+    """
+
+    NAMED = {"must_show": ["rocket", "launch pad", "hold down"],
+             "visual_target": "A rocket stands on its launch pad",
+             "spoken_phrase": "The rocket remains fixed to its pad"}
+
+    def test_a_thing_named_in_four_words_still_counts_once(self) -> None:
+        from .scene_match import required_items
+        wordy = {"must_show": ["Launch pad or support structure"]}
+        self.assertEqual(len(required_items(wordy)), 1)
+
+    def test_footage_of_the_pad_satisfies_a_pad_beat(self) -> None:
+        seen = terms("Rocket standing on a launch pad, exhaust below, service tower beside it")
+        self.assertGreater(match_score(self.NAMED, seen), MATCH_FLOOR)
+
+    def test_ascent_footage_still_fails_that_same_beat(self) -> None:
+        seen = terms("A rocket high in the sky trailing a long exhaust plume")
+        self.assertLess(match_score(self.NAMED, seen), MATCH_FLOOR)
+
+    def test_a_two_word_name_needs_both_words(self) -> None:
+        from .scene_match import item_is_shown
+        self.assertFalse(item_is_shown(terms("rocket base"), terms("a rocket in flight")))
+        self.assertTrue(item_is_shown(terms("rocket base"), terms("the base of the rocket")))
+
+    def test_a_longer_entry_is_met_by_half_its_words(self) -> None:
+        from .scene_match import item_is_shown
+        self.assertTrue(item_is_shown(terms("rocket exhaust plume"),
+                                      terms("a rocket with a long exhaust trail")))
+
+    def test_clamps_are_not_satisfied_by_arms(self) -> None:
+        """Two words, both needed: holding something is not a clamp."""
+        from .scene_match import item_is_shown
+        self.assertFalse(item_is_shown(terms("hold down clamps"),
+                                       terms("hold down arms gripping the vehicle")))
+
+    def test_a_doubled_consonant_does_not_hide_a_match(self) -> None:
+        self.assertEqual(terms("gripping"), terms("grips"))
+        self.assertEqual(terms("running"), terms("runs"))
+
+
+class SlateTests(unittest.TestCase):
+    """A NASA title card is not footage, and must never be cut into a Short.
+
+    A measured contact sheet came back with four of one clip's five tiles
+    reading "title card". Scored as words, "title" and "card" simply failed to
+    match anything, which is harmless; but a window resting on them was still
+    offered, and a beat with loose requirements could have taken it.
+    """
+
+    FRAMES = [{"index": 1, "at_seconds": 2.0, "describes": "title card"},
+              {"index": 2, "at_seconds": 8.0, "describes": "Title card showing TW@N text "
+                                                           "over a starry space background"},
+              {"index": 3, "at_seconds": 14.0, "describes": "Rocket lifting off a coastal "
+                                                            "launch pad in white smoke"},
+              {"index": 4, "at_seconds": 20.0, "describes": "black frame"}]
+
+    def test_a_window_resting_on_a_slate_offers_nothing(self) -> None:
+        self.assertEqual(window_terms(self.FRAMES, 1.0, 4.2), set())
+
+    def test_a_slate_that_goes_on_to_describe_the_graphic_is_still_a_slate(self) -> None:
+        self.assertEqual(window_terms(self.FRAMES, 7.0, 10.2), set())
+
+    def test_a_window_on_real_footage_keeps_its_words(self) -> None:
+        self.assertIn("rocket", window_terms(self.FRAMES, 13.0, 16.2))
+
+    def test_a_neighbouring_slate_adds_nothing_to_a_real_window(self) -> None:
+        seen = window_terms(self.FRAMES, 13.0, 16.2)
+        self.assertNotIn("card", seen)
+        self.assertNotIn("starry", seen)
+
+    def test_a_black_frame_is_not_footage_either(self) -> None:
+        self.assertEqual(window_terms(self.FRAMES, 19.0, 22.2), set())
+
+
+class StemmingTests(unittest.TestCase):
+    """The words this footage is actually described in have to meet each other."""
+
+    def test_the_words_a_launch_is_described_in(self) -> None:
+        for one, other in [("pads", "pad"), ("flames", "flame"), ("clamps", "clamp"),
+                           ("grips", "gripping"), ("runs", "running"),
+                           ("mounted", "mounts"), ("lifted", "lifts"),
+                           ("structures", "structure"), ("skies", "sky"),
+                           ("exhausts", "exhaust")]:
+            with self.subTest(one=one, other=other):
+                self.assertEqual(terms(one), terms(other))
+
+    def test_short_words_are_left_alone(self) -> None:
+        self.assertEqual(terms("gas"), {"gas"})
+        self.assertEqual(terms("across"), {"across"})
