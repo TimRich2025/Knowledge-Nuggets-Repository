@@ -18,6 +18,11 @@ NASA_IMAGES_SEARCH = "https://images-api.nasa.gov/search"
 # Largest first; an asset without ~orig still has a usable ~large.
 VIDEO_SIZE_ORDER = ("~orig", "~large", "~medium", "~small", "~preview")
 MAX_CANDIDATES = 12
+# NASA published standard definition for decades. A 2004 asset is genuinely
+# 320x212 and can never pass the renderer's Full HD gate, so asking for it
+# wastes a catalogue round trip and a header read. HD became the norm well
+# before this year.
+DEFAULT_EARLIEST_YEAR = 2015
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "KnowledgeNuggetsSourceCatalog/1.0"})
 
@@ -112,7 +117,8 @@ def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-def search_nasa_video_candidates(query: str, limit: int = 6) -> list[dict[str, Any]]:
+def search_nasa_video_candidates(query: str, limit: int = 6,
+                                 earliest_year: int = DEFAULT_EARLIEST_YEAR) -> list[dict[str, Any]]:
     """Return unverified direct NASA video candidates for later frame review.
 
     No returned object has `semantic_match=EXACT`, `temporal_match=VERIFIED`,
@@ -126,7 +132,9 @@ def search_nasa_video_candidates(query: str, limit: int = 6) -> list[dict[str, A
     try:
         response = _SESSION.get(
             NASA_IMAGES_SEARCH,
-            params={"q": query, "media_type": "video", "page_size": min(100, requested * 8)},
+            params={"q": query, "media_type": "video",
+                    "year_start": str(int(earliest_year)),
+                    "page_size": min(100, max(40, requested * 8))},
             timeout=(10, 30),
         )
         response.raise_for_status()

@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from .source_catalog import _asset_video_urls
+from .source_catalog import (DEFAULT_EARLIEST_YEAR, _asset_video_urls,
+                             search_nasa_video_candidates)
 
 
 class FakeResponse:
@@ -53,6 +54,31 @@ class VideoVariantTests(unittest.TestCase):
         """Vision reviews a cheap copy; the render never uses it."""
         _, review, _ = resolve([f"{BASE}~orig.mp4", f"{BASE}~preview.mp4"])
         self.assertEqual(review, f"{BASE}~preview.mp4")
+
+
+class CatalogueQueryTests(unittest.TestCase):
+    """Standard-definition archive material can never pass the render gate."""
+
+    def _params(self) -> dict:
+        captured: dict = {}
+
+        def get(url, params=None, timeout=None):
+            captured.update(params or {})
+            return FakeResponse({"collection": {"items": []}})
+
+        with patch("vps.source_catalog._SESSION.get", side_effect=get):
+            search_nasa_video_candidates("rocket launch", 5)
+        return captured
+
+    def test_the_search_asks_only_for_hd_era_assets(self) -> None:
+        self.assertEqual(self._params()["year_start"], str(DEFAULT_EARLIEST_YEAR))
+
+    def test_the_page_is_wide_enough_to_filter_from(self) -> None:
+        """Most results are discarded, so a narrow page leaves nothing behind."""
+        self.assertGreaterEqual(int(self._params()["page_size"]), 40)
+
+    def test_only_video_is_requested(self) -> None:
+        self.assertEqual(self._params()["media_type"], "video")
 
 
 if __name__ == "__main__":
