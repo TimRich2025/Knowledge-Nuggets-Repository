@@ -16,12 +16,14 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+from urllib.parse import urlencode
 from collections import Counter
 from typing import Any, Callable
 
 from .production_contract import (MAX_CONSECUTIVE_SCENES_PER_SOURCE,
                                   MAX_SOURCE_SHARE, MIN_DISTINCT_SOURCES,
                                   scene_source_key, validate_source_diversity)
+from .scene_match import MATCH_FLOOR, plan_by_content, terms, window_terms
 from .source_catalog import (SourceCatalogError, is_full_hd, probe_stream,
                              search_nasa_video_candidates)
 
@@ -519,4 +521,103 @@ def build_source_pool(
             "Intervals and URLs are measured facts. Copy them character for character "
             "and never invent, round or recompute one."
         ),
+    }
+
+
+# The public contact-sheet route extracts this many frames for a window and
+# spaces them evenly, so the times can be computed here rather than guessed.
+MAX_SHEET_FRAMES = 12
+MAX_SHEET_SECONDS = 90.0
+
+
+def sheet_frames(duration: float) -> list[dict[str, Any]]:
+    """Where the contact sheet's frames fall in a clip, in seconds.
+
+    The probe route derives its sampling from the window it is given, so the
+    same arithmetic here tells the vision pass which second each numbered frame
+    belongs to. Without that a description is just a list of pictures.
+    """
+    window = min(float(duration), MAX_SHEET_SECONDS)
+    count = max(2, min(MAX_SHEET_FRAMES, int(window) + 1))
+    period = window / count
+    return [{"index": index + 1, "at_seconds": round(index * period, 3)}
+            for index in range(count)]
+
+
+def describe_request(sources: list[dict[str, Any]], base_url: str) -> list[dict[str, Any]]:
+    """Each discovered work with the picture evidence needed to judge it."""
+    described = []
+    for source in sources:
+        window = min(float(source["measured_duration_seconds"]), MAX_SHEET_SECONDS)
+        query = urlencode({"source_url": source["direct_download_url"],
+                           "candidate_start_seconds": "0",
+                           "candidate_end_seconds": f"{window:.3f}"})
+        described.append({**source,
+                          "contact_sheet_url": f"{base_url.rstrip('/')}/source-probes/contact-sheet.jpg?{query}",
+                          "frames": sheet_frames(source["measured_duration_seconds"])})
+    return described
+
+
+def plan_from_observations(
+    beats: list[dict[str, Any]],
+    works: list[dict[str, Any]],
+    window_seconds: float = DEFAULT_WINDOW_SECONDS,
+    match_floor: float = MATCH_FLOOR,
+) -> dict[str, Any]:
+    """Assign beats to windows on what the frames were seen to contain.
+
+    Every window a work can offer is scored against every beat, so a beat is
+    given footage that shows what it says it needs rather than footage whose
+    catalogue title happens to mention the subject.
+    """
+    if not works:
+        raise SourcePoolError("no observed works were supplied")
+    candidates: list[dict[str, Any]] = []
+    for work in works:
+        frames = work.get("frames") or []
+        if not any(str(frame.get("describes") or "").strip() for frame in frames):
+            continue
+        duration = float(work.get("measured_duration_seconds") or 0)
+        for start, end in plan_windows(duration, MAX_WINDOWS_PER_SOURCE, window_seconds):
+            candidates.append({
+                "candidate_id": work["candidate_id"],
+                "title": work.get("title", ""),
+                "selected_asset_page_url": work.get("selected_asset_page_url"),
+                "direct_download_url": work.get("direct_download_url"),
+                "width": work.get("width"),
+                "height": work.get("height"),
+                "measured_duration_seconds": duration,
+                "shot_start_seconds": start,
+                "shot_end_seconds": end,
+                "seen": window_terms(frames, start, end),
+            })
+    if not candidates:
+        raise SourcePoolError(
+            "none of the supplied works carried a frame description; the vision "
+            "pass must say what each numbered frame shows")
+
+    result = plan_by_content(beats, candidates, match_floor=match_floor)
+    plan = result["plan"]
+    required = min(MIN_DISTINCT_SOURCES, len(beats))
+    if result["unmatched_beats"]:
+        raise SourcePoolError(
+            f"no observed footage matches beats {result['unmatched_beats']}; every "
+            f"window scored below {match_floor}. Search for the subject those beats "
+            f"describe, or rewrite them to something the footage can show")
+    if result["distinct_sources"] < required:
+        raise SourcePoolError(
+            f"the matching footage came from only {result['distinct_sources']} works, "
+            f"below the {required} the production contract requires")
+    validate_source_diversity(plan)
+    return {
+        "beats": len(plan),
+        "distinct_sources": result["distinct_sources"],
+        "window_seconds": window_seconds,
+        "weakest_match": result["weakest_match"],
+        "match_floor": match_floor,
+        "beat_plan": plan,
+        "assignment_policy": (
+            "Every interval was cut inside a measured length and every pairing was "
+            "scored against frames taken from the clip itself. Copy the URLs and "
+            "intervals character for character."),
     }

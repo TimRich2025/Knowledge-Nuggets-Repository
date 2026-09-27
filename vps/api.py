@@ -11,7 +11,9 @@ from .production_contract import validate_submission_contract
 from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
-from .source_pool import SourcePoolError, build_source_pool
+from .source_pool import (SourcePoolError, build_source_pool, collect_sources,
+                          describe_request, plan_from_observations, probe_stream)
+from .scene_match import MATCH_FLOOR
 from .social_metadata import MetadataError, build_social_metadata
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
@@ -81,6 +83,33 @@ class SourcePoolRequest(BaseModel):
     fallback_queries: list[str] = Field(default_factory=list, max_length=6)
     per_query: int = Field(default=10, ge=1, le=24)
     window_seconds: float = Field(default=3.2, ge=1.5, le=4.0)
+    callback_url: str | None = None
+
+class ObservedFrame(BaseModel):
+    index: int = Field(ge=1, le=64)
+    at_seconds: float = Field(ge=0)
+    describes: str = Field(default="", max_length=2000)
+
+class ObservedWork(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=200)
+    direct_download_url: str = Field(min_length=12, max_length=4000)
+    selected_asset_page_url: str = Field(default="", max_length=4000)
+    title: str = Field(default="", max_length=400)
+    width: int = Field(default=1920, ge=0)
+    height: int = Field(default=1080, ge=0)
+    measured_duration_seconds: float = Field(gt=0)
+    frames: list[ObservedFrame] = Field(default_factory=list, max_length=64)
+
+class BeatRequirement(BaseModel):
+    visual_target: str = Field(default="", max_length=600)
+    spoken_phrase: str = Field(default="", max_length=600)
+    must_show: list[str] = Field(default_factory=list, max_length=12)
+
+class SourcePlanRequest(BaseModel):
+    beats: list[BeatRequirement] = Field(min_length=1, max_length=40)
+    works: list[ObservedWork] = Field(min_length=1, max_length=40)
+    window_seconds: float = Field(default=3.2, ge=1.5, le=4.0)
+    match_floor: float = Field(default=MATCH_FLOOR, ge=0.1, le=0.9)
     callback_url: str | None = None
 
 class SocialMetadata(BaseModel):
@@ -247,6 +276,46 @@ def source_pool(payload: SourcePoolRequest, request: Request, authorization: str
         raise HTTPException(422, str(exc))
     except SourceCatalogError as exc:
         raise HTTPException(502, str(exc))
+
+@app.post("/source-pool/candidates")
+def source_pool_candidates(payload: SourcePoolRequest, request: Request,
+                           authorization: str | None = Header(default=None)):
+    """Discover works and hand back the picture evidence needed to judge them.
+
+    The plan is deliberately not built here. A beat can only be paired with
+    footage once something has looked at the footage, so this call ends with a
+    contact sheet per work and the second of each numbered frame.
+    """
+    if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
+        auth(authorization)
+    allow_public_probe(request)
+    try:
+        sources = collect_sources(
+            [segment.model_dump() for segment in payload.segments],
+            payload.per_query, payload.window_seconds,
+            search_nasa_video_candidates, probe_stream)
+    except SourcePoolError as exc:
+        raise HTTPException(422, str(exc))
+    except SourceCatalogError as exc:
+        raise HTTPException(502, str(exc))
+    return {"sources": describe_request(sources, public_base_url(request)),
+            "frame_policy": ("Each frame's at_seconds is its real position in the clip. "
+                             "Describe what is visible in that frame only, in plain nouns.")}
+
+@app.post("/source-pool/plan")
+def source_pool_plan(payload: SourcePlanRequest, request: Request,
+                     authorization: str | None = Header(default=None)):
+    """Pair every beat with footage that was seen to contain what it needs."""
+    if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
+        auth(authorization)
+    try:
+        return plan_from_observations(
+            [beat.model_dump() for beat in payload.beats],
+            [work.model_dump() for work in payload.works],
+            window_seconds=payload.window_seconds,
+            match_floor=payload.match_floor)
+    except (SourcePoolError, ValueError) as exc:
+        raise HTTPException(422, str(exc))
 
 @app.post("/social-metadata")
 def social_metadata(payload: SocialMetadata, authorization: str | None = Header(default=None)):
