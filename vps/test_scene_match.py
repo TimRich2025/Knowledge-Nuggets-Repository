@@ -601,3 +601,37 @@ class StemmingTests(unittest.TestCase):
     def test_short_words_are_left_alone(self) -> None:
         self.assertEqual(terms("gas"), {"gas"})
         self.assertEqual(terms("across"), {"across"})
+
+
+class RetryQueryTests(unittest.TestCase):
+    """What to search for next, once a brief names single things.
+
+    Telling the planner to write must_show as short names fixed the scoring and
+    broke the retry: "clamp", "sky" and "exhaust" went back to the catalogue on
+    their own, and a widening round came home with a novelty yule-log video of
+    rocket nozzles in a stone fireplace.
+    """
+
+    BEATS = [{"must_show": ["rocket", "launch pad", "service tower"]},
+             {"must_show": ["rocket", "flames", "launch pad"]},
+             {"must_show": ["clamps", "rocket"]},
+             {"must_show": ["rocket", "sky"]}]
+
+    def test_a_single_name_is_paired_with_the_script_s_subject(self) -> None:
+        from .scene_match import suggested_queries
+        self.assertIn("rocket clamp", suggested_queries(self.BEATS, [3]))
+
+    def test_the_subject_itself_is_not_doubled(self) -> None:
+        from .scene_match import suggested_queries
+        found = suggested_queries(self.BEATS, [3])
+        self.assertIn("rocket", found)
+        self.assertNotIn("rocket rocket", found)
+
+    def test_a_two_word_name_is_left_as_it_is(self) -> None:
+        from .scene_match import suggested_queries
+        self.assertIn("launch pad", suggested_queries(self.BEATS, [1]))
+
+    def test_the_same_failure_suggests_the_same_search(self) -> None:
+        from .scene_match import suggested_queries
+        self.assertEqual(suggested_queries(self.BEATS, [3, 4]),
+                         suggested_queries(self.BEATS, [3, 4]))

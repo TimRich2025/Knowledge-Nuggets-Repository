@@ -272,17 +272,31 @@ def suggested_queries(beats: list[dict[str, Any]], unmatched: list[int],
     than shredded into tokens and recombined: pairing the ranked words of
     several unrelated beats produced "base control", which asks for nothing.
     """
+    def named(phrase: object) -> list[str]:
+        return [stem(word) for word in re.findall(r"[a-zA-Z][a-zA-Z']*", str(phrase).lower())
+                if word not in STOPWORDS and word not in GENERIC_SUBJECTS and len(word) > 2]
+
+    # The subject the whole script is about, taken from every beat rather than
+    # the failing ones. A one-word query is what a brief naming single things
+    # produces, and "clamp" or "sky" on its own asks a catalogue for anything at
+    # all; paired with the subject it asks for this film.
+    everywhere: Counter = Counter()
+    for beat in beats:
+        for phrase in beat.get("must_show") or []:
+            everywhere.update(set(named(phrase)))
+    subject = min(everywhere.items(), key=lambda pair: (-pair[1], pair[0]))[0] if everywhere else ""
+
     seen: Counter = Counter()
     for position in unmatched:
         if not 1 <= position <= len(beats):
             continue
         for phrase in beats[position - 1].get("must_show") or []:
-            words = [stem(word) for word in re.findall(r"[a-zA-Z][a-zA-Z']*", str(phrase).lower())
-                     if word not in STOPWORDS and word not in GENERIC_SUBJECTS and len(word) > 2]
+            words = named(phrase)
             if len(words) >= 2:
                 seen[" ".join(words[:2])] += 1
             elif words:
-                seen[words[0]] += 1
+                one = words[0]
+                seen[one if one == subject or not subject else f"{subject} {one}"] += 1
     # Sorted rather than most_common: a set's iteration order changes with the
     # interpreter's hash seed, and a retry that differs run to run cannot be
     # reasoned about.
