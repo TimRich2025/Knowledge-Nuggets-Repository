@@ -37,10 +37,35 @@ MIN_WINDOW_SEPARATION = 0.4
 PROBE_TIMEOUT_SECONDS = 40
 # More windows than the share cap will ever let one work spend.
 MAX_WINDOWS_PER_SOURCE = 8
+# Every kept candidate costs a catalogue round trip and sometimes a header
+# read, and Make's HTTP module gives this call a bounded wait.  Three usable
+# works per segment already clears the five-source floor with two segments.
+MAX_SOURCES_PER_SEGMENT = 4
 
 
 class SourcePoolError(RuntimeError):
     pass
+
+
+def parse_catalogue_duration(value: object) -> float:
+    """Read the catalogue's own duration string, when it published a usable one.
+
+    NASA writes it as "0:00:47", "47.50 s" or simply a number, depending on the
+    asset.  Anything else is treated as absent, because a wrong length would
+    place a window past the end of the clip.
+    """
+    text = str(value or "").strip().replace("s", "").strip()
+    if not text:
+        return 0.0
+    try:
+        if ":" in text:
+            seconds = 0.0
+            for part in text.split(":"):
+                seconds = seconds * 60 + float(part)
+            return seconds
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def probe_duration(url: str) -> float:
@@ -98,6 +123,7 @@ def collect_sources(
     window: float,
     search: Callable[[str, int], list[dict[str, Any]]],
     measure: Callable[[str], float],
+    max_per_segment: int = MAX_SOURCES_PER_SEGMENT,
 ) -> list[dict[str, Any]]:
     """Discover and measure the works behind every query, keeping the order.
 
@@ -116,17 +142,23 @@ def collect_sources(
         except SourceCatalogError as exc:
             failures.append(f"{query}: {exc}")
             continue
+        kept = 0
         for candidate in candidates:
+            if kept >= max_per_segment:
+                break
             key = str(candidate.get("candidate_id") or "")
             if not key or key in seen:
                 continue
             direct = str(candidate.get("direct_download_url") or "")
             if not direct:
                 continue
-            duration = measure(direct)
+            # The published length costs nothing; reading the file's own header
+            # costs a network round trip, so it is the fallback, not the rule.
+            duration = parse_catalogue_duration(candidate.get("source_duration")) or measure(direct)
             if not _usable_source(candidate, duration, window):
                 continue
             seen.add(key)
+            kept += 1
             sources.append({
                 "segment": position,
                 "query": query,
@@ -136,6 +168,10 @@ def collect_sources(
                 "keywords": candidate.get("keywords", []),
                 "selected_asset_page_url": candidate.get("catalog_page_url") or candidate.get("asset_listing_url"),
                 "direct_download_url": direct,
+                # The catalogue's own storyboard frames, carried through so a
+                # later vision pass can look at the work before a beat claims
+                # what it shows.
+                "review_frame_urls": candidate.get("review_frame_urls") or [],
                 "width": candidate.get("source_width") or 1920,
                 "height": candidate.get("source_height") or 1080,
                 "measured_duration_seconds": round(duration, 2),
@@ -227,6 +263,7 @@ def build_source_pool(
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     search: Callable[[str, int], list[dict[str, Any]]] | None = None,
     measure: Callable[[str], float] | None = None,
+    max_per_segment: int = MAX_SOURCES_PER_SEGMENT,
 ) -> dict[str, Any]:
     """Return a measured, contract-clean beat plan the writing model can dress."""
     if not segments:
@@ -236,7 +273,8 @@ def build_source_pool(
         raise SourcePoolError("the segments request no beats")
     sources = collect_sources(segments, per_query, window_seconds,
                               search or search_nasa_video_candidates,
-                              measure or probe_duration)
+                              measure or probe_duration,
+                              max_per_segment=max_per_segment)
     required = min(MIN_DISTINCT_SOURCES, beats)
     if len(sources) < required:
         raise SourcePoolError(

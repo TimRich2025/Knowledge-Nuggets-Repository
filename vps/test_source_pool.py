@@ -4,8 +4,9 @@ import unittest
 
 from .production_contract import validate_source_diversity
 from .source_pool import (DEFAULT_WINDOW_SECONDS, LEAD_IN_SECONDS,
-                          SourcePoolError, TAIL_SECONDS, assign_beats,
-                          build_source_pool, plan_windows)
+                          MAX_SOURCES_PER_SEGMENT, SourcePoolError,
+                          TAIL_SECONDS, assign_beats, build_source_pool,
+                          parse_catalogue_duration, plan_windows)
 
 
 def candidate(asset: str) -> dict:
@@ -77,6 +78,37 @@ class WindowPlanningTests(unittest.TestCase):
             self.assertGreaterEqual(second_start, first_end)
 
 
+class CatalogueDurationTests(unittest.TestCase):
+    """The published length saves a network round trip when it is readable."""
+
+    def test_a_clock_string_is_read_as_seconds(self) -> None:
+        self.assertAlmostEqual(parse_catalogue_duration("0:01:12"), 72.0)
+
+    def test_a_plain_number_is_read_as_seconds(self) -> None:
+        self.assertAlmostEqual(parse_catalogue_duration("47.5 s"), 47.5)
+
+    def test_an_unreadable_value_falls_back_to_measuring(self) -> None:
+        self.assertEqual(parse_catalogue_duration("unknown"), 0.0)
+        self.assertEqual(parse_catalogue_duration(None), 0.0)
+
+    def test_a_published_length_is_preferred_over_a_header_read(self) -> None:
+        fake = FakeCatalogue(CATALOGUE)
+        published = {**CATALOGUE}
+        reads: list[str] = []
+
+        def search(query, limit):
+            return [{**candidate(asset), "source_duration": "0:01:30"}
+                    for asset in published.get(query, [])][:limit]
+
+        def measure(url):
+            reads.append(url)
+            return 90.0
+
+        build_source_pool(SEGMENTS, search=search, measure=measure)
+        self.assertEqual(reads, [])
+        del fake
+
+
 class BeatAssignmentTests(unittest.TestCase):
     def _pool(self, **kwargs):
         fake = FakeCatalogue(CATALOGUE, **kwargs)
@@ -90,6 +122,15 @@ class BeatAssignmentTests(unittest.TestCase):
     def test_the_plan_uses_every_work_it_discovered(self) -> None:
         pool, _ = self._pool()
         self.assertEqual(pool["distinct_sources"], 8)
+
+    def test_a_segment_stops_probing_once_it_has_enough(self) -> None:
+        """Each kept candidate costs a round trip, and Make's wait is bounded."""
+        wide = {"ignition": [f"IGN{n}" for n in range(9)], "liftoff": ["OFF1", "OFF2"],
+                "ascent": ["ASC1", "ASC2"]}
+        fake = FakeCatalogue(wide)
+        pool = build_source_pool(SEGMENTS, per_query=9, search=fake.search, measure=fake.measure)
+        from_ignition = [s for s in pool["sources"] if s["query"] == "ignition"]
+        self.assertEqual(len(from_ignition), MAX_SOURCES_PER_SEGMENT)
 
     def test_no_two_neighbouring_beats_share_a_clip(self) -> None:
         pool, _ = self._pool()
@@ -143,9 +184,11 @@ class BeatAssignmentTests(unittest.TestCase):
     def test_a_segment_with_one_clip_borrows_rather_than_repeating(self) -> None:
         """Otherwise a thin query would put two identical beats side by side."""
         thin = [{"query": "ignition", "beats": 2}, {"query": "liftoff", "beats": 16}]
-        fake = FakeCatalogue({"ignition": ["IGN1", "IGN2", "IGN3", "IGN4"], "liftoff": ["OFF1"]})
-        pool = build_source_pool(thin, search=fake.search, measure=fake.measure)
+        fake = FakeCatalogue({"ignition": ["IGN1", "IGN2", "IGN3", "IGN4", "IGN5"], "liftoff": ["OFF1"]})
+        pool = build_source_pool(thin, search=fake.search, measure=fake.measure, max_per_segment=5)
         validate_source_diversity(pool["beat_plan"])
+        carried = [beat["candidate_id"] for beat in pool["beat_plan"][2:]]
+        self.assertGreater(len(set(carried)), 1)
 
     def test_a_short_clip_limits_how_often_it_can_be_reused(self) -> None:
         fake = FakeCatalogue(CATALOGUE, duration=20.0)
