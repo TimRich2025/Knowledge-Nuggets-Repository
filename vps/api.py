@@ -80,7 +80,7 @@ class SourcePoolRequest(BaseModel):
     # Broader terms, used only when the segments alone miss the source floor.
     fallback_queries: list[str] = Field(default_factory=list, max_length=6)
     per_query: int = Field(default=10, ge=1, le=24)
-    window_seconds: float = Field(default=2.3, ge=1.5, le=2.35)
+    window_seconds: float = Field(default=3.2, ge=1.5, le=4.0)
     callback_url: str | None = None
 
 class SocialMetadata(BaseModel):

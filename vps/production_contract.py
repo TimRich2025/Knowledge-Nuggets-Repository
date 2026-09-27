@@ -11,7 +11,11 @@ from collections import Counter
 from typing import Any
 
 
-MAX_SHOT_SECONDS = 2.4
+# The narration is spoken as one passage and the visual cuts follow its word
+# boundaries, so a beat lasts as long as its sentence does rather than being
+# stretched into a fixed slot. A six-word beat runs about two seconds; the
+# ceiling leaves room for a slower one without letting a shot outstay a cut.
+MAX_SHOT_SECONDS = 4.0
 MIN_SHOT_SECONDS = 0.6
 # The shortest source window the ingest can cut a usable segment from.
 MIN_SOURCE_SHOT_SECONDS = 1.5

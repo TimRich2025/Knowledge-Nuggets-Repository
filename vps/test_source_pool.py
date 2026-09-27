@@ -156,11 +156,18 @@ class BeatAssignmentTests(unittest.TestCase):
             seen[beat["candidate_id"]].add(window)
 
     def test_every_interval_fits_the_renderer_ingest_window(self) -> None:
+        from .production_contract import MAX_SHOT_SECONDS, MIN_SOURCE_SHOT_SECONDS
         pool, _ = self._pool()
         for beat in pool["beat_plan"]:
             span = beat["shot_end_seconds"] - beat["shot_start_seconds"]
-            self.assertGreaterEqual(span, 1.5)
-            self.assertLess(span, 2.4)
+            self.assertGreaterEqual(span, MIN_SOURCE_SHOT_SECONDS)
+            self.assertLessEqual(span, MAX_SHOT_SECONDS)
+
+    def test_a_window_is_wider_than_the_beat_it_must_hold(self) -> None:
+        """A slower sentence must still fit the shot it was given."""
+        pool, _ = self._pool()
+        for beat in pool["beat_plan"]:
+            self.assertGreaterEqual(beat["shot_end_seconds"] - beat["shot_start_seconds"], 3.0)
 
     def test_too_few_discovered_works_fails_loudly_here(self) -> None:
         """Better a named failure in discovery than a rejected job three steps on."""

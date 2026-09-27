@@ -30,9 +30,10 @@ from .source_catalog import (SourceCatalogError, is_full_hd, probe_stream,
 # a fade, so both ends are left out of the usable span.
 LEAD_IN_SECONDS = 3.0
 TAIL_SECONDS = 1.5
-# A beat window.  Kept just inside the 2.4s ingest limit, which floating point
-# pushes over when it is written as exactly 2.4.
-DEFAULT_WINDOW_SECONDS = 2.3
+# A beat window. Wider than a beat actually needs, because the narration is
+# spoken as one passage and a slower sentence must still fit inside the shot it
+# was given. The renderer trims the segment to the spoken length.
+DEFAULT_WINDOW_SECONDS = 3.2
 # Two windows from one work must not overlap, or the Short repeats itself
 # inside a single source.
 MIN_WINDOW_SEPARATION = 0.4

@@ -62,3 +62,35 @@ class CaptionLayoutTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CaptionAnimationTests(unittest.TestCase):
+    """The pop-in must never exceed the size the layout reserved space for."""
+
+    def test_a_word_never_grows_past_its_measured_size(self) -> None:
+        """At 122% the outermost word crossed the margin by up to 26px."""
+        from layout_lock import CAPTION_POP_SCALE
+        self.assertLessEqual(CAPTION_POP_SCALE, 1.0)
+
+    def test_the_real_eighteen_beat_script_stays_inside_the_margin(self) -> None:
+        from PIL import Image, ImageDraw, ImageFont
+        from layout_lock import CAPTION_POP_SCALE
+        beats = [
+            "ROCKET STANDS ON ITS LAUNCH PAD", "A LAUNCH TOWER RISES BESIDE IT",
+            "GROUND SUPPORTS HOLD THE ROCKET STEADY", "ENGINES IGNITE BENEATH THE WAITING ROCKET",
+            "ENGINE THRUST BUILDS WHILE SUPPORTS STILL HOLD",
+            "LIFTOFF FOLLOWS BUILT THRUST, NOT FLAME",
+        ]
+        font = ImageFont.truetype(CAPTION_FONT, CAPTION_SIZE)
+        probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        scale = max(1.0, CAPTION_POP_SCALE)
+        for beat in beats:
+            for word, cx, _ in caption_layout(beat.split()):
+                half = probe.textlength(word, font=font) / 2 * scale
+                self.assertGreaterEqual(cx - half, CAPTION_MARGIN - 1, beat)
+                self.assertLessEqual(cx + half, CANVAS_W - CAPTION_MARGIN + 1, beat)
+
+    def test_a_six_word_beat_needs_at_most_two_lines(self) -> None:
+        """Three stacked caption lines crowd the picture area."""
+        rows = {cy for _, _, cy in caption_layout("GROUND SUPPORTS HOLD THE ROCKET STEADY".split())}
+        self.assertLessEqual(len(rows), 2)

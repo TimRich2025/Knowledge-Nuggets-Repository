@@ -49,8 +49,14 @@ BRAND_TRACKING=5.5
 
 # Captions never cross this margin. They wrap instead of leaving the frame.
 CAPTION_MARGIN=96
-CAPTION_SIZE=66
-CAPTION_LINE_STEP=84
+CAPTION_SIZE=56
+CAPTION_LINE_STEP=72
+# A word settles inward to its final size rather than popping outward past it.
+# At 122% outward a six-word beat crossed the margin by 21 to 26 pixels, because
+# the outermost word grows around its own fixed centre and the layout can only
+# reserve space for the size it was measured at. Anything at or below 1.0 keeps
+# the guarantee that caption_layout makes.
+CAPTION_POP_SCALE=0.90
 CAPTION_CENTRE_Y=round(HEADER_H+0.58*(LOGO_Y-HEADER_H))
 CAPTION_MAX_W=CANVAS_W-2*CAPTION_MARGIN
 CAPTION_WORD_SPACE=1.0

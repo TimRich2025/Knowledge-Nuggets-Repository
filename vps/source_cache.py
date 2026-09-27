@@ -276,6 +276,148 @@ def _caption_timings(scene: dict, cues: list[dict], duration: float) -> list[dic
     return timings
 
 
+# A beat boundary is placed in the middle of the pause between two beats, so a
+# visual cut never lands on a word and never clips its tail.
+MIN_BEAT_SECONDS = 0.6
+
+
+def split_narration_at_word_boundaries(
+    phrases: list[str],
+    spoken: list[dict],
+    total: float,
+) -> tuple[list[dict], list[list[dict]]]:
+    """Cut one continuous reading into beats, between the words rather than on them.
+
+    Each boundary sits halfway through the pause the voice actually left, so a
+    visual cut never clips a word's tail and never opens on a syllable already
+    in progress. The first beat starts at the top of the file and the last ends
+    at its end, so the beats tile the narration exactly.
+    """
+    groups: list[list[dict]] = []
+    cursor = 0
+    for index, phrase in enumerate(phrases, 1):
+        wanted = _words(phrase)
+        taken = spoken[cursor:cursor + len(wanted)]
+        if [item["word"] for item in taken] != wanted:
+            raise IngestError(f"scene {index}: synthesized words differ from the spoken script")
+        cursor += len(wanted)
+        groups.append(taken)
+    if cursor != len(spoken):
+        raise IngestError("the narration spoke more words than the script contains")
+
+    bounds = [0.0]
+    for earlier, later in zip(groups, groups[1:]):
+        bounds.append(round((earlier[-1]["end"] + later[0]["start"]) / 2, 6))
+    bounds.append(round(float(total), 6))
+    for index in range(len(groups)):
+        if bounds[index + 1] - bounds[index] < MIN_BEAT_SECONDS:
+            raise IngestError(
+                f"scene {index + 1}: spoken beat lasts only "
+                f"{bounds[index + 1] - bounds[index]:.2f}s; give it more words")
+
+    timings = [{"speech_start_seconds": bounds[index], "speech_end_seconds": bounds[index + 1]}
+               for index in range(len(groups))]
+    caption_sets = []
+    for index, words in enumerate(groups):
+        origin = bounds[index]
+        duration = bounds[index + 1] - origin
+        captions = []
+        previous = 0.0
+        for item in words:
+            start = min(duration, max(previous, item["start"] - origin))
+            end = min(duration, max(start + 0.05, item["end"] - origin))
+            captions.append({"text": item["word"].upper(),
+                             "start_seconds": round(start, 3),
+                             "end_seconds": round(end, 3)})
+            previous = end
+        caption_sets.append(captions)
+    return timings, caption_sets
+
+
+def synthesize_continuous_narration(
+    scenes: list[dict],
+    voice: str,
+    rate: str,
+) -> tuple[dict, list[dict], list[list[dict]]]:
+    """Speak the whole script once, then cut it at the word boundaries.
+
+    Synthesising each beat on its own is what made the narration sound
+    assembled rather than read: every beat opened with a sentence-initial
+    attack and closed on a falling cadence, the silence at both ends was
+    trimmed away so the words butted together, and each beat was then
+    time-stretched to fit its slot, which changed the speaking speed from one
+    beat to the next.
+
+    Read as one passage the voice keeps its own rhythm and its own pauses, and
+    the word boundaries say exactly where each beat ends. The visual cuts then
+    follow the speech instead of the speech being forced onto the cuts.
+    """
+    if voice not in NATURAL_MALE_EDGE_VOICES:
+        raise IngestError("production contract requires an approved natural male Edge voice")
+    rate_match = re.fullmatch(r"[+-](\d{1,2})%", rate)
+    if not rate_match or int(rate_match.group(1)) > 12:
+        raise IngestError("production contract requires a natural Edge speaking rate between -12% and +12%")
+
+    phrases = [str(scene.get("spoken_phrase") or "").strip() for scene in scenes]
+    for index, phrase in enumerate(phrases, 1):
+        if not phrase:
+            raise IngestError(f"scene {index}: spoken_phrase required for neural TTS")
+    script = " ".join(phrases)
+    key = hashlib.sha256(f"continuous-v1|{voice}|{rate}|{script}".encode()).hexdigest()
+    dest = CACHE / f"{key}.wav"
+    cue_path = CACHE / f"{key}.cues.json"
+
+    if not (dest.exists() and cue_path.is_file()):
+        with tempfile.TemporaryDirectory(prefix="edge-tts-", dir=CACHE) as tmp_name:
+            tmp = Path(tmp_name)
+            media = tmp / "narration.mp3"
+            subtitles = tmp / "narration.srt"
+            errors = []
+            for attempt in range(1, 4):
+                result = subprocess.run(build_tts_command(voice, rate, script, media, subtitles),
+                                        capture_output=True, text=True, timeout=180)
+                if result.returncode == 0 and media.is_file() and subtitles.is_file():
+                    break
+                errors.append((result.stderr or result.stdout or "no output")[-500:])
+                time.sleep(2 * attempt)
+            else:
+                raise IngestError(f"neural TTS failed after retries: {' | '.join(errors)}")
+            wav = tmp / "narration.wav"
+            # No silence removal. The pauses the voice puts between sentences are
+            # the reason it sounds read rather than assembled.
+            command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(media),
+                       "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+            if result.returncode or not wav.is_file():
+                raise IngestError(f"narration decode failed: {result.stderr[-500:]}")
+            cue_path.write_text(json.dumps(_parse_edge_srt(subtitles)), encoding="utf-8")
+            os.replace(wav, dest)
+    os.utime(dest, None)
+
+    cues = json.loads(cue_path.read_text(encoding="utf-8"))
+    spoken: list[dict] = []
+    for cue in cues:
+        cue_words = _words(cue["text"])
+        if not cue_words:
+            continue
+        span = max(0.01, float(cue["end"]) - float(cue["start"]))
+        for index, word in enumerate(cue_words):
+            spoken.append({"word": word,
+                           "start": float(cue["start"]) + span * index / len(cue_words),
+                           "end": float(cue["start"]) + span * (index + 1) / len(cue_words)})
+    if not spoken:
+        raise IngestError("neural TTS returned no word boundaries")
+
+    media_meta = _audio_meta(ffprobe(dest), min_seconds=5.0, max_seconds=90.0)
+    total = float(media_meta["duration"])
+
+    timings, caption_sets = split_narration_at_word_boundaries(phrases, spoken, total)
+
+    meta = {"key": key, "url": "inline://continuous-tts", "kind": "scene_audio",
+            "path": str(dest), "bytes": dest.stat().st_size, **media_meta}
+    return meta, timings, caption_sets
+
+
 def synthesize_edge_scene_audio(
     scenes: list[dict],
     voice: str,
@@ -477,12 +619,17 @@ def ingest_job(job: dict) -> dict:
             max_durations=[float(scene["shot_end_seconds"])-float(scene["shot_start_seconds"]) for scene in raw_scenes]
         except Exception as exc:
             raise IngestError("verified visual durations are required before neural TTS") from exc
-        audio,speech_timings,caption_timings=synthesize_edge_scene_audio(
+        audio,speech_timings,caption_timings=synthesize_continuous_narration(
             raw_scenes,
             str(job.get("tts_voice") or "en-US-AndrewMultilingualNeural"),
             str(job.get("tts_rate") or "+8%"),
-            max_durations,
         )
+        for index,(timing,window) in enumerate(zip(speech_timings,max_durations),1):
+            spoken=float(timing["speech_end_seconds"])-float(timing["speech_start_seconds"])
+            if spoken > float(window)+0.05:
+                raise IngestError(
+                    f"scene {index}: the beat is spoken in {spoken:.2f}s but its verified "
+                    f"shot window is only {float(window):.2f}s")
     elif scene_audio:
         try:
             max_durations=[float(scene["shot_end_seconds"])-float(scene["shot_start_seconds"]) for scene in raw_scenes]

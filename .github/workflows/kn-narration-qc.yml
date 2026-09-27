@@ -13,6 +13,7 @@ on:
       - vps/source_pool.py
       - vps/source_catalog.py
       - vps/test_source_variant.py
+      - vps/test_continuous_narration.py
       - vps/test_source_pool.py
       - vps/local_renderer.py
       - vps/test_concat_tolerance.py
@@ -61,6 +62,7 @@ jobs:
           python -m unittest vps.test_source_diversity
           python -m unittest vps.test_source_pool
           python -m unittest vps.test_source_variant
+          python -m unittest vps.test_continuous_narration
           python -m unittest vps.test_concat_tolerance
           python -m unittest vps.test_caption_layout
           python -m unittest vps.test_social_metadata

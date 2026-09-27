@@ -3,7 +3,8 @@ from __future__ import annotations
 import copy
 import unittest
 
-from .production_contract import validate_measured_render_contract, validate_submission_contract
+from .production_contract import (MAX_SHOT_SECONDS, validate_measured_render_contract,
+                                  validate_submission_contract)
 
 
 SCENE = {
@@ -25,9 +26,9 @@ class ProductionContractTests(unittest.TestCase):
         }
         validate_submission_contract(job)
 
-    def test_rejects_a_shot_longer_than_two_point_four_seconds(self) -> None:
-        scene = {**SCENE, "shot_end_seconds": 14.41}
-        with self.assertRaisesRegex(ValueError, "2.4s"):
+    def test_rejects_a_shot_longer_than_the_documented_ceiling(self) -> None:
+        scene = {**SCENE, "shot_end_seconds": 12.0 + MAX_SHOT_SECONDS + 0.05}
+        with self.assertRaisesRegex(ValueError, "verified shot must be between"):
             validate_submission_contract({"tts_provider": "EDGE", "scenes": [scene]})
 
     def test_rejects_unmeasured_or_long_caption_beats(self) -> None:

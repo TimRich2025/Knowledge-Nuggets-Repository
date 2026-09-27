@@ -2,7 +2,7 @@ from __future__ import annotations
 import json, re, shutil, subprocess
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
-from layout_lock import (build_header, caption_layout, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H,
+from layout_lock import (CAPTION_POP_SCALE, build_header, caption_layout, VIDEO_H, VIDEO_Y, CANVAS_W, CANVAS_H,
                          HEADER_H, CAPTION_FONT_NAME, CAPTION_MARGIN,
                          caption_ass_fontsize)
 from .production_contract import concat_duration_tolerance, validate_measured_render_contract, validate_submission_contract
@@ -118,10 +118,13 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             if laid!=word:
                 raise RenderError("caption layout reordered the words")
             appear=elapsed+start
-            # Overshoot then settle, and fade in slightly faster than it scales,
-            # so the word reads as placed rather than as flying in.
+            # Settle outward to the measured size, never past it. A word that
+            # overshoots grows around its own fixed centre, which the layout
+            # cannot reserve space for, and the outermost word of a full line
+            # then crosses the margin for the length of the animation.
+            pop=round(CAPTION_POP_SCALE*100)
             effect=(r"\an5\pos(" f"{cx},{cy}" r")"
-                    r"\fscx122\fscy122\t(0,120,\fscx100\fscy100)"
+                    f"\\fscx{pop}\\fscy{pop}" r"\t(0,120,\fscx100\fscy100)"
                     r"\alpha&HFF&\t(0,70,\alpha&H00&)")
             events.append(
                 f"Dialogue: 0,{ass_time(appear)},{ass_time(elapsed+dur)},Main,,0,0,0,,"

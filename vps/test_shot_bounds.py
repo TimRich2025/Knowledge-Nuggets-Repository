@@ -24,11 +24,12 @@ class ShotBoundTests(unittest.TestCase):
     """A window at the documented limit must be accepted by every check."""
 
     def test_binary_floating_point_overshoots_the_written_limit(self) -> None:
-        # The defect this guards: 8.4 - 6.0 is not 2.4 but a hair above it.
-        self.assertGreater(8.4 - 6.0, MAX_SHOT_SECONDS)
+        # The defect this guards: 8.3 - 4.3 is not 4.0 but a hair above it, so a
+        # window written at the documented limit fails a naive comparison.
+        self.assertGreater(8.3 - 4.3, MAX_SHOT_SECONDS)
 
     def test_a_window_at_the_limit_is_accepted_on_ingest(self) -> None:
-        self.assertIsNone(source_window_error(8.4 - 6.0))
+        self.assertIsNone(source_window_error(8.3 - 4.3))
 
     def test_a_window_at_the_lower_limit_is_accepted_on_ingest(self) -> None:
         self.assertIsNone(source_window_error(7.5 - 6.0))
