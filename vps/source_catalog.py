@@ -15,6 +15,8 @@ import requests
 
 
 NASA_IMAGES_SEARCH = "https://images-api.nasa.gov/search"
+# Largest first; an asset without ~orig still has a usable ~large.
+VIDEO_SIZE_ORDER = ("~orig", "~large", "~medium", "~small", "~preview")
 MAX_CANDIDATES = 12
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "KnowledgeNuggetsSourceCatalog/1.0"})
@@ -48,7 +50,17 @@ def _asset_video_urls(asset_listing_url: str) -> tuple[str | None, str | None, l
         return None, None, []
     secured_links = [secured for link in links if isinstance(link, str) for secured in [_nasa_https_url(link)] if secured]
     videos = [link for link in secured_links if link.lower().split("?")[0].endswith(".mp4")]
-    originals = sorted(videos, key=lambda link: ("~orig" not in link.lower(), len(link)))
+    # Rank by NASA's own size suffix, best first. Sorting by URL length instead
+    # picks ~preview.mp4 whenever an asset has no ~orig, and a 320x212 preview
+    # fails the renderer's Full HD gate after the whole job has been built.
+    def _size_rank(link: str) -> tuple[int, int]:
+        lowered = link.lower()
+        for rank, suffix in enumerate(("~orig", "~large", "~medium", "~small", "~preview")):
+            if suffix in lowered:
+                return rank, len(link)
+        return len(VIDEO_SIZE_ORDER), len(link)
+
+    originals = sorted(videos, key=_size_rank)
     review_variants = sorted(
         videos,
         key=lambda link: (
