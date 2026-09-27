@@ -260,3 +260,31 @@ class ObservationMergeTests(unittest.TestCase):
         self.assertEqual(payload["vision_images"][0]["imageUploadType"], "url")
         self.assertIn("IMAGE 1: work A", payload["vision_context"])
         self.assertIn("1=0.0s", payload["vision_context"])
+
+
+class ToleranceTests(unittest.TestCase):
+    """A scenario splices a model's answer straight into a request body."""
+
+    def test_a_plain_json_list_is_read(self) -> None:
+        from .source_pool import loads_tolerant
+        self.assertEqual(loads_tolerant('[{"candidate_id":"A"}]'), [{"candidate_id": "A"}])
+
+    def test_a_fenced_answer_is_read_rather_than_refused(self) -> None:
+        """Refusing the fence costs a production run to teach a lesson nobody learns."""
+        from .source_pool import loads_tolerant
+        fenced = '```json\n[{"candidate_id":"B"}]\n```'
+        self.assertEqual(loads_tolerant(fenced), [{"candidate_id": "B"}])
+
+    def test_a_wrapped_object_is_unwrapped(self) -> None:
+        from .source_pool import loads_tolerant
+        self.assertEqual(loads_tolerant('{"observations":[{"candidate_id":"C"}]}'),
+                         [{"candidate_id": "C"}])
+
+    def test_an_already_parsed_list_passes_through(self) -> None:
+        from .source_pool import loads_tolerant
+        self.assertEqual(loads_tolerant([{"candidate_id": "D"}]), [{"candidate_id": "D"}])
+
+    def test_unreadable_input_yields_nothing_rather_than_raising(self) -> None:
+        from .source_pool import loads_tolerant
+        for value in ("not json", "", None, "{{broken}}"):
+            self.assertEqual(loads_tolerant(value), [])

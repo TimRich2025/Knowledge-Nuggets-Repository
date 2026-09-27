@@ -13,7 +13,8 @@ from .visual_probe import create_source_probe, make_probe_token, probe_frame_pat
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
 from .source_pool import (SourcePoolError, build_source_pool, collect_sources,
                           describe_request, merge_observations,
-                          plan_from_observations, probe_stream, vision_payload)
+                          loads_tolerant, plan_from_observations, probe_stream,
+                          vision_payload)
 from .scene_match import MATCH_FLOOR
 from .social_metadata import MetadataError, build_social_metadata
 
@@ -118,12 +119,14 @@ class WorkObservation(BaseModel):
     frames: list[FrameObservation] = Field(default_factory=list, max_length=64)
 
 class SourcePlanRequest(BaseModel):
-    beats: list[BeatRequirement] = Field(min_length=1, max_length=40)
+    # Both lists may arrive as JSON text, which is what a language model hands
+    # back when a scenario splices its answer straight into a request body.
+    beats: list[BeatRequirement] | str = Field(min_length=1)
     # Either the pool this plan belongs to, or the works spelled out in full.
     # The pool id is the normal path: it keeps every URL and measured number on
     # this side, so no model can mistype one into a job.
     pool_id: str = Field(default="", max_length=64)
-    observations: list[WorkObservation] = Field(default_factory=list, max_length=40)
+    observations: list[WorkObservation] | str = Field(default_factory=list)
     works: list[ObservedWork] = Field(default_factory=list, max_length=40)
     window_seconds: float = Field(default=3.2, ge=1.5, le=4.0)
     match_floor: float = Field(default=MATCH_FLOOR, ge=0.1, le=0.9)
@@ -331,18 +334,24 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
     """Pair every beat with footage that was seen to contain what it needs."""
     if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
         auth(authorization)
+    beats = [beat if isinstance(beat, dict) else beat.model_dump()
+             for beat in loads_tolerant(payload.beats)] if isinstance(payload.beats, str) \
+        else [beat.model_dump() for beat in payload.beats]
+    if not beats:
+        raise HTTPException(422, "no readable beats were supplied")
+    observed = loads_tolerant(payload.observations) if isinstance(payload.observations, str) \
+        else [entry.model_dump() for entry in payload.observations]
     works = [work.model_dump() for work in payload.works]
     if payload.pool_id:
         stored = db().get(f"kn:pool:{safe_id(payload.pool_id)}")
         if not stored:
             raise HTTPException(409, "that source pool has expired; discover the works again")
-        works = merge_observations(json.loads(stored),
-                                   [entry.model_dump() for entry in payload.observations])
+        works = merge_observations(json.loads(stored), observed)
     if not works:
         raise HTTPException(422, "supply either a pool_id with observations, or works in full")
     try:
         return plan_from_observations(
-            [beat.model_dump() for beat in payload.beats], works,
+            beats, works,
             window_seconds=payload.window_seconds,
             match_floor=payload.match_floor)
     except (SourcePoolError, ValueError) as exc:

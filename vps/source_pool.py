@@ -673,3 +673,32 @@ def plan_from_observations(
             "scored against frames taken from the clip itself. Copy the URLs and "
             "intervals character for character."),
     }
+
+
+def loads_tolerant(value: object) -> list[dict[str, Any]]:
+    """Read a JSON list that may arrive as text, possibly inside a code fence.
+
+    A language model asked for JSON returns JSON, wrapped in ```json about as
+    often as not. Refusing the wrapper costs a whole production run to teach a
+    lesson the next model will not have learned.
+    """
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    text = str(value or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1] if "\n" in text else ""
+        text = text.rsplit("```", 1)[0].strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return []
+    if isinstance(parsed, dict):
+        for key in ("observations", "works", "beats", "items", "result"):
+            if isinstance(parsed.get(key), list):
+                parsed = parsed[key]
+                break
+        else:
+            parsed = [parsed]
+    return [item for item in parsed if isinstance(item, dict)]
