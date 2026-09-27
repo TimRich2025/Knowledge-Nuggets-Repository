@@ -44,8 +44,13 @@ jobs:
       - name: Prepare speech runtime
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          # The same font packages the worker image installs. Without them the
+          # layout tests cannot open NotoSansDisplay and every one of them errors.
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core fonts-noto-extra
           command -v ffmpeg
+          test -f /usr/share/fonts/truetype/noto/NotoSansDisplay-Black.ttf
+          test -f /usr/share/fonts/truetype/noto/NotoSansDisplay-ExtraCondensedBlack.ttf
+          test -f /usr/share/fonts/truetype/noto/NotoSansDisplay-Light.ttf
           python -m pip install -r vps/requirements.txt
       - name: Synthesize and verify all spoken words
         run: |
