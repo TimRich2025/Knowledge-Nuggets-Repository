@@ -36,6 +36,42 @@ target market is not US. Without the API key the endpoint returns a labelled
 topic fallback, never pretends to have a live trend signal. Store the API key in
 the deployment's environment only, never in this repository.
 
+## Footage variety
+
+A Short cut from one clip is one long take with jump cuts in it, and every
+Short published before this section existed was built that way. Three rules in
+`production_contract.py` now decide the matter, and both `POST /jobs` and the
+ingest apply them:
+
+- at least five distinct works per Short
+- no work carrying more than a third of the scenes
+- no more than two neighbouring scenes from the same work
+
+A work is identified by its NASA asset id, so the catalogue page and the media
+file of one asset count once.
+
+Supplying that variety is the harder half, and asking a writing model for more
+sources is what failed: a model cannot see a video, so it invents plausible
+URLs and plausible timecodes and the ingest rejects the job. `POST /source-pool`
+measures instead. It takes one search segment per third of the script and
+returns a beat plan in which every URL is a real catalogue asset and every
+interval was cut inside that asset's measured length. Beats are dealt out
+across the works by rule, so the plan satisfies the three rules by
+construction; the writing model only describes what each work shows.
+
+Two things decide whether a run succeeds:
+
+- **Search for the subject, never for the mission.** `Saturn V launch pad
+  gantry` matches three usable works, `rocket launch pad ignition` matches
+  eight. Five is the floor.
+- **Send `fallback_queries`.** Two broader terms, used only when the segments
+  miss the floor, so a script whose subject was named too exactly widens
+  instead of failing.
+
+What is measured is the interval, not the content: a beat is described from its
+work's catalogue title. The pool carries each work's official storyboard frames
+so a later vision pass can look before a beat claims what it shows.
+
 ## Deploy
 
 Copy `.env.example` to `.env`, set a long `KN_API_TOKEN`, then:
