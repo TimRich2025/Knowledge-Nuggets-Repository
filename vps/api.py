@@ -77,6 +77,8 @@ class SourceSegment(BaseModel):
 
 class SourcePoolRequest(BaseModel):
     segments: list[SourceSegment] = Field(min_length=1, max_length=8)
+    # Broader terms, used only when the segments alone miss the source floor.
+    fallback_queries: list[str] = Field(default_factory=list, max_length=6)
     per_query: int = Field(default=5, ge=1, le=12)
     window_seconds: float = Field(default=2.3, ge=1.5, le=2.35)
     callback_url: str | None = None
@@ -237,6 +239,7 @@ def source_pool(payload: SourcePoolRequest, request: Request, authorization: str
     try:
         return build_source_pool(
             [segment.model_dump() for segment in payload.segments],
+            fallback_queries=[q for q in payload.fallback_queries if q.strip()],
             per_query=payload.per_query,
             window_seconds=payload.window_seconds,
         )

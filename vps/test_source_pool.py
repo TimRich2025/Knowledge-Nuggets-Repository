@@ -206,3 +206,72 @@ class BeatAssignmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CataloguePageTests(unittest.TestCase):
+    """The page URL must be a page, not the preview image the search lists first."""
+
+    def test_a_nasa_work_gets_its_details_page(self) -> None:
+        from .source_pool import catalogue_page_url
+        found = candidate("KSC-20190914-RV-ILW01_0001")
+        found["source_family"] = "NASA Images"
+        found["catalog_page_url"] = ("https://images-assets.nasa.gov/video/KSC-20190914-RV-ILW01_0001/"
+                                     "KSC-20190914-RV-ILW01_0001~large.jpg")
+        self.assertEqual(catalogue_page_url(found),
+                         "https://images.nasa.gov/details/KSC-20190914-RV-ILW01_0001")
+
+    def test_an_image_link_is_never_returned_as_a_page(self) -> None:
+        from .source_pool import catalogue_page_url
+        found = candidate("OTHER")
+        found["source_family"] = "Wikimedia Commons"
+        found["catalog_page_url"] = "https://upload.wikimedia.org/x/Tide~large.jpg"
+        found["asset_listing_url"] = "https://commons.wikimedia.org/wiki/File:Tide.webm"
+        self.assertEqual(catalogue_page_url(found),
+                         "https://commons.wikimedia.org/wiki/File:Tide.webm")
+
+    def test_the_pool_publishes_the_page_not_the_thumbnail(self) -> None:
+        fake = FakeCatalogue(CATALOGUE)
+
+        def search(query, limit):
+            return [{**candidate(asset), "source_family": "NASA Images",
+                     "catalog_page_url": f"https://images-assets.nasa.gov/video/{asset}/{asset}~large.jpg"}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        pool = build_source_pool(SEGMENTS, search=search, measure=fake.measure)
+        for beat in pool["beat_plan"]:
+            self.assertTrue(beat["selected_asset_page_url"].startswith("https://images.nasa.gov/details/"))
+
+
+class WideningTests(unittest.TestCase):
+    """A script named too precisely must not cost the whole production."""
+
+    NARROW = {"ignition": ["SATURN1"], "liftoff": ["APOLLO1"], "ascent": ["SHUTTLE1"]}
+    BROAD = {"rocket launch": ["GEN1", "GEN2"], "rocket ascent": ["GEN3", "GEN4"]}
+
+    def _catalogue(self):
+        return FakeCatalogue({**self.NARROW, **self.BROAD})
+
+    def test_three_narrow_queries_alone_fail_with_advice(self) -> None:
+        fake = self._catalogue()
+        with self.assertRaisesRegex(SourcePoolError, "search for the subject instead"):
+            build_source_pool(SEGMENTS, search=fake.search, measure=fake.measure)
+
+    def test_broader_terms_rescue_the_run(self) -> None:
+        fake = self._catalogue()
+        pool = build_source_pool(SEGMENTS, fallback_queries=["rocket launch", "rocket ascent"],
+                                 search=fake.search, measure=fake.measure)
+        validate_source_diversity(pool["beat_plan"])
+        self.assertEqual(pool["distinct_sources"], 7)
+
+    def test_widening_is_skipped_when_the_floor_is_already_met(self) -> None:
+        fake = FakeCatalogue({**CATALOGUE, **self.BROAD})
+        build_source_pool(SEGMENTS, fallback_queries=["rocket launch"],
+                          search=fake.search, measure=fake.measure)
+        self.assertNotIn("rocket launch", fake.queries)
+
+    def test_a_work_already_found_is_not_added_twice(self) -> None:
+        fake = FakeCatalogue({**self.NARROW, "rocket launch": ["SATURN1", "GEN1", "GEN2", "GEN3"]})
+        pool = build_source_pool(SEGMENTS, fallback_queries=["rocket launch"],
+                                 search=fake.search, measure=fake.measure)
+        assets = [source["candidate_id"] for source in pool["sources"]]
+        self.assertEqual(len(assets), len(set(assets)))

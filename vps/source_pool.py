@@ -43,8 +43,29 @@ MAX_WINDOWS_PER_SOURCE = 8
 MAX_SOURCES_PER_SEGMENT = 4
 
 
+NASA_DETAILS_PAGE = "https://images.nasa.gov/details/"
+
+
 class SourcePoolError(RuntimeError):
     pass
+
+
+def catalogue_page_url(candidate: dict[str, Any]) -> str:
+    """The work's catalogue page, not the first link the search happened to list.
+
+    The NASA search puts a preview JPEG first under `links`, so the field that
+    reads like a page URL is an image. Every NASA asset has a details page at a
+    known address, so build it from the asset id and keep whatever the search
+    gave only for a source family that has no such convention.
+    """
+    if str(candidate.get("source_family") or "") == "NASA Images":
+        asset = str(candidate.get("candidate_id") or "").strip()
+        if asset:
+            return f"{NASA_DETAILS_PAGE}{asset}"
+    page = str(candidate.get("catalog_page_url") or "")
+    if page.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png")):
+        return str(candidate.get("asset_listing_url") or page)
+    return page or str(candidate.get("asset_listing_url") or "")
 
 
 def parse_catalogue_duration(value: object) -> float:
@@ -166,7 +187,7 @@ def collect_sources(
                 "title": candidate.get("title", ""),
                 "description": candidate.get("description", ""),
                 "keywords": candidate.get("keywords", []),
-                "selected_asset_page_url": candidate.get("catalog_page_url") or candidate.get("asset_listing_url"),
+                "selected_asset_page_url": catalogue_page_url(candidate),
                 "direct_download_url": direct,
                 # The catalogue's own storyboard frames, carried through so a
                 # later vision pass can look at the work before a beat claims
@@ -246,6 +267,17 @@ def assign_beats(
     return plan
 
 
+def _widen(sources, segments, fallback_queries, per_query, window, search, measure, max_per_segment):
+    """Add works found by broader terms, spread evenly over the segments."""
+    known = {source["candidate_id"] for source in sources}
+    widened = [{"query": str(query), "beats": 1} for query in fallback_queries if str(query).strip()]
+    extra = collect_sources(widened, per_query, window, search, measure,
+                            max_per_segment=max_per_segment)
+    for position, source in enumerate(source for source in extra if source["candidate_id"] not in known):
+        sources.append({**source, "segment": position % max(1, len(segments))})
+    return sources
+
+
 def _pick(pool, used, windows, previous, share_cap):
     """The least-used work that is not exhausted, not last used, not over share."""
     options = [source for source in pool
@@ -259,6 +291,7 @@ def _pick(pool, used, windows, previous, share_cap):
 
 def build_source_pool(
     segments: list[dict[str, Any]],
+    fallback_queries: list[str] | None = None,
     per_query: int = 5,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     search: Callable[[str, int], list[dict[str, Any]]] | None = None,
@@ -271,15 +304,22 @@ def build_source_pool(
     beats = sum(int(segment.get("beats") or 0) for segment in segments)
     if beats < 1:
         raise SourcePoolError("the segments request no beats")
-    sources = collect_sources(segments, per_query, window_seconds,
-                              search or search_nasa_video_candidates,
-                              measure or probe_duration,
+    search = search or search_nasa_video_candidates
+    measure = measure or probe_duration
+    sources = collect_sources(segments, per_query, window_seconds, search, measure,
                               max_per_segment=max_per_segment)
     required = min(MIN_DISTINCT_SOURCES, beats)
+    if len(sources) < required and fallback_queries:
+        # A precise query returns a handful of works; a broad one returns dozens.
+        # Rather than fail a good script because its subject was named too
+        # exactly, widen once with the caller's broader terms and keep going.
+        sources = _widen(sources, segments, fallback_queries, per_query, window_seconds,
+                         search, measure, max_per_segment)
     if len(sources) < required:
         raise SourcePoolError(
             f"only {len(sources)} usable works were found, below the {required} the "
-            f"production contract requires; add or broaden a search segment"
+            f"production contract requires. A query naming one mission or vehicle "
+            f"matches only a handful of works; search for the subject instead"
         )
     plan = assign_beats(segments, sources, window_seconds)
     # Fail here rather than three scenarios later: the plan is machine-made, so
