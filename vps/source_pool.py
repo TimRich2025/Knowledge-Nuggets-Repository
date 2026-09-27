@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+from collections import Counter
 from typing import Any, Callable
 
 from .production_contract import (MAX_CONSECUTIVE_SCENES_PER_SOURCE,
@@ -99,9 +100,15 @@ def probe_stream(url: str) -> tuple[float, int, int]:
     """
     try:
         output = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+            ["ffprobe", "-v", "error",
+             # The same HTTP identity the ingest uses. Without them the
+             # catalogue answers 403 and every clip reads as unmeasurable.
+             "-user_agent", "KnowledgeNuggetsSourceIngest/4.0",
+             "-referer", "https://images.nasa.gov/",
+             "-rw_timeout", "20000000",
+             "-select_streams", "v:0",
              "-show_entries", "stream=width,height:format=duration",
-             "-of", "json", "-timeout", "20000000", url],
+             "-of", "json", url],
             capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=True,
         ).stdout
         payload = json.loads(output)
@@ -170,6 +177,10 @@ def collect_sources(
     seen: set[str] = set()
     sources: list[dict[str, Any]] = []
     failures: list[str] = []
+    # Why a candidate was dropped is the only thing that explains a short pool,
+    # and the message in the datastore is the only place anyone reads it.
+    rejected = Counter()
+    smallest_rejected = ""
     for position, segment in enumerate(segments):
         query = str(segment.get("query") or "").strip()
         if not query:
@@ -190,6 +201,7 @@ def collect_sources(
             if not direct:
                 continue
             if candidate.get("technical_status") == "REJECT_BELOW_FHD":
+                rejected["below Full HD"] += 1
                 continue
             # The published figures cost nothing; reading the file's own header
             # costs a network round trip, so it is the fallback, not the rule.
@@ -201,7 +213,15 @@ def collect_sources(
                 duration = duration or measured_duration
                 if measured_width and measured_height:
                     width, height = measured_width, measured_height
+            if not width or not height:
+                rejected["size unreadable"] += 1
+                continue
+            if not is_full_hd(width, height):
+                rejected["below Full HD"] += 1
+                smallest_rejected = smallest_rejected or f"{width}x{height}"
+                continue
             if not _usable_source(width, height, duration, window):
+                rejected[f"shorter than {LEAD_IN_SECONDS + TAIL_SECONDS + window:.1f}s"] += 1
                 continue
             seen.add(key)
             kept += 1
@@ -223,9 +243,19 @@ def collect_sources(
                 "measured_duration_seconds": round(duration, 2),
             })
     if not sources:
-        detail = "; ".join(failures) or "no catalogue result carried a usable direct video"
-        raise SourcePoolError(f"no usable source was found for any segment ({detail})")
+        detail = "; ".join(failures + [rejection_summary(rejected, smallest_rejected)])
+        raise SourcePoolError(f"no usable source was found for any segment ({detail.strip('; ')})")
+    collect_sources.last_rejections = rejection_summary(rejected, smallest_rejected)
     return sources
+
+
+def rejection_summary(rejected: Counter, smallest: str) -> str:
+    if not rejected:
+        return ""
+    parts = [f"{count} {reason}" for reason, count in rejected.most_common()]
+    if smallest:
+        parts[0] += f" (e.g. {smallest})"
+    return "rejected " + ", ".join(parts)
 
 
 def assign_beats(
@@ -341,10 +371,13 @@ def build_source_pool(
         sources = _widen(sources, segments, fallback_queries, per_query, window_seconds,
                          search, measure, max_per_segment)
     if len(sources) < required:
+        why = getattr(collect_sources, "last_rejections", "")
         raise SourcePoolError(
             f"only {len(sources)} usable works were found, below the {required} the "
-            f"production contract requires. A query naming one mission or vehicle "
-            f"matches only a handful of works; search for the subject instead"
+            f"production contract requires"
+            + (f"; {why}" if why else "")
+            + ". A query naming one mission or vehicle matches only a handful of "
+              "works; search for the subject instead"
         )
     plan = assign_beats(segments, sources, window_seconds)
     # Fail here rather than three scenarios later: the plan is machine-made, so

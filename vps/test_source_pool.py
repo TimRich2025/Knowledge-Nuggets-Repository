@@ -342,3 +342,27 @@ class FullHdGateTests(unittest.TestCase):
 
         pool = build_source_pool(SEGMENTS, search=search, measure=measure)
         self.assertTrue(all(source["width"] == 3840 for source in pool["sources"]))
+
+
+class RejectionReportingTests(unittest.TestCase):
+    """A short pool must say what it threw away, or nobody can widen the search."""
+
+    def test_the_error_names_the_reason_and_an_example_size(self) -> None:
+        def search(query, limit):
+            return [{**candidate(asset), "source_width": 1630, "source_height": 1080}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        with self.assertRaises(SourcePoolError) as caught:
+            build_source_pool(SEGMENTS, search=search, measure=lambda url: (90.0, 1630, 1080))
+        message = str(caught.exception)
+        self.assertIn("below Full HD", message)
+        self.assertIn("1630x1080", message)
+
+    def test_a_short_clip_is_reported_as_short_not_as_small(self) -> None:
+        def search(query, limit):
+            return [{**candidate(asset), "source_duration": "0:00:04"}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        with self.assertRaises(SourcePoolError) as caught:
+            build_source_pool(SEGMENTS, search=search, measure=lambda url: (4.0, 1920, 1080))
+        self.assertIn("shorter than", str(caught.exception))
