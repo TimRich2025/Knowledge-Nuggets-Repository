@@ -11,7 +11,7 @@ import json
 import re
 import subprocess
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import requests
 
@@ -83,12 +83,22 @@ def _approved_nasa_url(url: str) -> bool:
 
 
 def _nasa_https_url(url: str) -> str | None:
-    """Upgrade NASA catalogue HTTP links to HTTPS after validating the host."""
+    """Upgrade NASA catalogue HTTP links to HTTPS after validating the host.
+
+    The path is percent-encoded on the way out. An asset's id in this catalogue
+    can be its own title, so the listing hands back paths holding spaces and en
+    dashes, as in ".../video/The Move to the Launch Pad for Artemis I on This
+    Week @NASA - November 11, 2022/...~orig.mp4". Passed on as they arrive,
+    those read as broken or invented further down the pipeline, and a package
+    builder refused a whole job over one. Already-encoded paths are left alone,
+    because % is kept safe.
+    """
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     if parsed.scheme not in {"http", "https"} or not (host == "nasa.gov" or host.endswith(".nasa.gov")):
         return None
-    return urlunparse(parsed._replace(scheme="https"))
+    return urlunparse(parsed._replace(scheme="https",
+                                      path=quote(parsed.path, safe="/~%:@!$&'()*+,;=")))
 
 
 def _asset_video_urls(asset_listing_url: str) -> tuple[str | None, str | None, list[str]]:

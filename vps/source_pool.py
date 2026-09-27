@@ -17,14 +17,14 @@ import json
 import math
 import re
 import subprocess
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from collections import Counter
 from typing import Any, Callable
 
 from .production_contract import (MAX_CONSECUTIVE_SCENES_PER_SOURCE,
                                   MAX_SOURCE_SHARE, MIN_DISTINCT_SOURCES,
                                   scene_source_key, validate_source_diversity)
-from .scene_match import (MATCH_FLOOR, plan_by_content, suggested_queries, terms,
+from .scene_match import (MATCH_FLOOR, is_footage, plan_by_content, suggested_queries, terms,
                           window_terms)
 from .source_catalog import (SourceCatalogError, is_full_hd, probe_stream,
                              search_nasa_video_candidates)
@@ -82,7 +82,9 @@ def catalogue_page_url(candidate: dict[str, Any]) -> str:
     if str(candidate.get("source_family") or "") == "NASA Images":
         asset = str(candidate.get("candidate_id") or "").strip()
         if asset:
-            return f"{NASA_DETAILS_PAGE}{asset}"
+            # An asset id can be its own title, spaces, commas and all, so the
+            # page address is encoded rather than pasted together raw.
+            return f"{NASA_DETAILS_PAGE}{quote(asset, safe='~%')}"
     page = str(candidate.get("catalog_page_url") or "")
     if page.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png")):
         return str(candidate.get("asset_listing_url") or page)
@@ -413,6 +415,9 @@ MAX_SHEET_SECONDS = 90.0
 # How many works are sent for description at once. Beyond this the vision pass
 # starts blurring one sheet into the next.
 MAX_DESCRIBED_WORKS = 8
+# How many of a work's stills must show something real before it is worth
+# offering at all. Below this it is a compilation or a slideshow, not footage.
+MIN_FOOTAGE_FRAMES = 2
 # How often a plan may send the search back out for footage its beats need.
 # Each round costs a catalogue search and a vision pass, and a subject the
 # library genuinely does not hold will not appear on the third attempt either.
@@ -589,7 +594,13 @@ def plan_from_observations(
     candidates: list[dict[str, Any]] = []
     for work in works:
         frames = work.get("frames") or []
-        if not any(str(frame.get("describes") or "").strip() for frame in frames):
+        # A work has to be footage, not a programme about footage. A live pool
+        # offered "This Week @NASA - November 11, 2022", whose stills read title
+        # card, title card, title card, title card, and one real shot: one good
+        # window out of eight, and a beat that took it would be cutting from a
+        # news magazine. Two real stills is the least that makes a work worth
+        # carrying, and dropping the rest is what the widening round is for.
+        if sum(1 for frame in frames if is_footage(frame.get("describes"))) < MIN_FOOTAGE_FRAMES:
             continue
         duration = float(work.get("measured_duration_seconds") or 0)
         for start, end in plan_windows(duration, MAX_WINDOWS_PER_SOURCE, window_seconds):

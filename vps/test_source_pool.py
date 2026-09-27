@@ -403,3 +403,59 @@ class CandidateAccountingTests(unittest.TestCase):
         with self.assertRaises(SourcePoolError) as caught:
             build_source_pool(SEGMENTS, search=search, measure=lambda url: (90.0, 1920, 1080))
         self.assertIn("no direct video file", str(caught.exception))
+
+
+class CompilationTests(unittest.TestCase):
+    """A programme about footage is not footage.
+
+    A live pool offered "The Move to the Launch Pad for Artemis I on This Week
+    @NASA", whose five stills read title card, title card, title card, title
+    card and one real shot. It won a beat on that one shot, and the Short would
+    have cut from a news magazine's intro.
+    """
+
+    def work(self, asset: str, described: list[str]) -> dict:
+        return {"candidate_id": asset, "title": asset,
+                "selected_asset_page_url": f"https://images.nasa.gov/details/{asset}",
+                "direct_download_url": f"https://images-assets.nasa.gov/video/{asset}/x~orig.mp4",
+                "width": 1920, "height": 1080, "measured_duration_seconds": 60.0,
+                "frames": [{"index": n, "at_seconds": 5.0 * n, "describes": text}
+                           for n, text in enumerate(described, 1)]}
+
+    BEATS = [{"must_show": ["rocket", "launch pad"],
+              "visual_target": "A rocket stands on a launch pad",
+              "spoken_phrase": "The rocket waits on the pad"}]
+
+    def test_a_clip_that_is_mostly_title_cards_is_not_offered(self) -> None:
+        from .source_pool import SourcePoolError, plan_from_observations
+        magazine = self.work("ThisWeekAtNASA", ["title card", "title card", "title card",
+                                                "title card",
+                                                "Rocket on a launch pad in white smoke"])
+        with self.assertRaises(SourcePoolError):
+            plan_from_observations(self.BEATS, [magazine])
+
+    def test_a_clip_with_two_real_stills_is_kept(self) -> None:
+        from .source_pool import plan_from_observations
+        real = self.work("RealLaunch", ["title card",
+                                        "Rocket standing on a launch pad beside a tower",
+                                        "Rocket on the launch pad with smoke below",
+                                        "black frame", "blurred frame"])
+        plan = plan_from_observations(self.BEATS, [real])
+        self.assertEqual(len(plan["beat_plan"]), 1)
+
+
+class AssetUrlTests(unittest.TestCase):
+    """An asset id in this catalogue can be its own title, spaces and all."""
+
+    def test_a_page_address_is_encoded(self) -> None:
+        from .source_pool import catalogue_page_url
+        page = catalogue_page_url({"source_family": "NASA Images",
+                                   "candidate_id": "This Week @NASA, November 11"})
+        self.assertNotIn(" ", page)
+        self.assertIn("This%20Week", page)
+
+    def test_an_ordinary_id_is_left_readable(self) -> None:
+        from .source_pool import catalogue_page_url
+        self.assertTrue(catalogue_page_url(
+            {"source_family": "NASA Images", "candidate_id": "PSI_Test-ID_28"}
+        ).endswith("PSI_Test-ID_28"))
