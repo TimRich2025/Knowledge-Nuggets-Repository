@@ -69,7 +69,7 @@ class SourceProbe(BaseModel):
 
 class SourceCandidateSearch(BaseModel):
     query: str = Field(min_length=2, max_length=240)
-    limit: int = Field(default=6, ge=1, le=12)
+    limit: int = Field(default=6, ge=1, le=24)
 
 class SourceSegment(BaseModel):
     query: str = Field(min_length=2, max_length=240)
@@ -79,7 +79,7 @@ class SourcePoolRequest(BaseModel):
     segments: list[SourceSegment] = Field(min_length=1, max_length=8)
     # Broader terms, used only when the segments alone miss the source floor.
     fallback_queries: list[str] = Field(default_factory=list, max_length=6)
-    per_query: int = Field(default=5, ge=1, le=12)
+    per_query: int = Field(default=10, ge=1, le=24)
     window_seconds: float = Field(default=2.3, ge=1.5, le=2.35)
     callback_url: str | None = None
 

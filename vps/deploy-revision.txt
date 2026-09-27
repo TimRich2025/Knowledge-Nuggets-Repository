@@ -14,3 +14,4 @@ preserve-pause-verify-spoken-timing-v1
 multi-source-beat-plan-v1
 measured-fhd-gate-v1
 hd-era-sources-v1
+hd-first-discovery-v1

@@ -361,7 +361,7 @@ def _pick(pool, used, windows, previous, share_cap):
 def build_source_pool(
     segments: list[dict[str, Any]],
     fallback_queries: list[str] | None = None,
-    per_query: int = 5,
+    per_query: int = 10,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     search: Callable[[str, int], list[dict[str, Any]]] | None = None,
     measure: Callable[[str], tuple[float, int, int]] | None = None,

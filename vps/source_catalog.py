@@ -17,7 +17,7 @@ import requests
 NASA_IMAGES_SEARCH = "https://images-api.nasa.gov/search"
 # Largest first; an asset without ~orig still has a usable ~large.
 VIDEO_SIZE_ORDER = ("~orig", "~large", "~medium", "~small", "~preview")
-MAX_CANDIDATES = 12
+MAX_CANDIDATES = 24
 # NASA published standard definition for decades. A 2004 asset is genuinely
 # 320x212 and can never pass the renderer's Full HD gate, so asking for it
 # wastes a catalogue round trip and a header read. HD became the norm well
@@ -117,6 +117,21 @@ def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _search_items(query: str, requested: int, earliest_year: int | None) -> list[dict[str, Any]]:
+    """One catalogue page, optionally restricted to the HD era."""
+    params = {"q": query, "media_type": "video",
+              "page_size": min(100, max(40, requested * 8))}
+    if earliest_year:
+        params["year_start"] = str(int(earliest_year))
+    try:
+        response = _SESSION.get(NASA_IMAGES_SEARCH, params=params, timeout=(10, 30))
+        response.raise_for_status()
+        items = response.json().get("collection", {}).get("items", [])
+    except (requests.RequestException, ValueError) as exc:
+        raise SourceCatalogError(f"NASA catalogue search failed: {exc}") from exc
+    return items if isinstance(items, list) else []
+
+
 def search_nasa_video_candidates(query: str, limit: int = 6,
                                  earliest_year: int = DEFAULT_EARLIEST_YEAR) -> list[dict[str, Any]]:
     """Return unverified direct NASA video candidates for later frame review.
@@ -129,20 +144,18 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
     if len(query) < 2:
         raise SourceCatalogError("source query must contain at least two characters")
     requested = max(1, min(int(limit), MAX_CANDIDATES))
-    try:
-        response = _SESSION.get(
-            NASA_IMAGES_SEARCH,
-            params={"q": query, "media_type": "video",
-                    "year_start": str(int(earliest_year)),
-                    "page_size": min(100, max(40, requested * 8))},
-            timeout=(10, 30),
-        )
-        response.raise_for_status()
-        items = response.json().get("collection", {}).get("items", [])
-    except (requests.RequestException, ValueError) as exc:
-        raise SourceCatalogError(f"NASA catalogue search failed: {exc}") from exc
+    items = _search_items(query, requested, earliest_year)
+    if len(items) < requested * 2:
+        # The year filter is a preference, not a requirement. When it leaves the
+        # page nearly empty, whether because the catalogue holds little recent
+        # footage for this subject or because the parameter behaves differently
+        # than documented, an unfiltered page is better than no footage at all.
+        seen_hrefs = {item.get("href") for item in items}
+        items = items + [item for item in _search_items(query, requested, None)
+                         if item.get("href") not in seen_hrefs]
 
     candidates: list[dict[str, Any]] = []
+    below_hd: list[dict[str, Any]] = []
     for item in items:
         if len(candidates) >= requested:
             break
@@ -159,7 +172,7 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
             continue
         technical = _asset_metadata(asset_listing)
         fhd = _fhd_or_higher(technical["source_width"], technical["source_height"])
-        candidates.append({
+        record = {
             "candidate_id": nasa_id,
             "source_family": "NASA Images",
             "title": _text(data.get("title"), 300),
@@ -176,5 +189,13 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
             "candidate_status": "UNVERIFIED_REQUIRES_FRAME_REVIEW",
             "rights_status": "UNVERIFIED_REQUIRES_SOURCE_REVIEW",
             "verification_note": "Metadata is discovery evidence only. Extract and inspect a bounded frame probe before assigning a shot interval.",
-        })
-    return candidates
+        }
+        # A work the catalogue itself calls sub-HD can never pass the renderer's
+        # Full HD gate, so it does not occupy one of the requested slots. It is
+        # kept aside rather than discarded, because a caller with nothing else
+        # would rather see it than see an empty list.
+        if record["technical_status"] == "REJECT_BELOW_FHD":
+            below_hd.append(record)
+        else:
+            candidates.append(record)
+    return candidates or below_hd[:requested]

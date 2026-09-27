@@ -56,29 +56,91 @@ class VideoVariantTests(unittest.TestCase):
         self.assertEqual(review, f"{BASE}~preview.mp4")
 
 
-class CatalogueQueryTests(unittest.TestCase):
-    """Standard-definition archive material can never pass the render gate."""
+def item(nasa_id: str) -> dict:
+    return {"href": f"https://images-assets.nasa.gov/video/{nasa_id}/collection.json",
+            "data": [{"nasa_id": nasa_id, "title": nasa_id}],
+            "links": [{"href": f"https://images-assets.nasa.gov/video/{nasa_id}/{nasa_id}~large.jpg"}]}
 
-    def _params(self) -> dict:
-        captured: dict = {}
+
+class CatalogueQueryTests(unittest.TestCase):
+    """The year filter is a preference. It must never starve the search."""
+
+    def _run(self, pages: list[list[dict]]):
+        calls: list[dict] = []
 
         def get(url, params=None, timeout=None):
-            captured.update(params or {})
-            return FakeResponse({"collection": {"items": []}})
+            calls.append(dict(params or {}))
+            page = pages[min(len(calls) - 1, len(pages) - 1)]
+            return FakeResponse({"collection": {"items": page}})
 
         with patch("vps.source_catalog._SESSION.get", side_effect=get):
-            search_nasa_video_candidates("rocket launch", 5)
-        return captured
+            with patch("vps.source_catalog._asset_video_urls",
+                       return_value=(f"{BASE}~orig.mp4", f"{BASE}~preview.mp4", [])):
+                with patch("vps.source_catalog._asset_metadata",
+                           return_value={"metadata_url": "", "source_width": 1920,
+                                         "source_height": 1080, "source_duration": "0:01:00"}):
+                    found = search_nasa_video_candidates("rocket launch", 5)
+        return calls, found
 
-    def test_the_search_asks_only_for_hd_era_assets(self) -> None:
-        self.assertEqual(self._params()["year_start"], str(DEFAULT_EARLIEST_YEAR))
+    def test_the_first_page_asks_for_hd_era_assets(self) -> None:
+        calls, _ = self._run([[item(f"A{n}") for n in range(20)]])
+        self.assertEqual(calls[0]["year_start"], str(DEFAULT_EARLIEST_YEAR))
+
+    def test_a_full_page_is_not_retried_unfiltered(self) -> None:
+        calls, _ = self._run([[item(f"A{n}") for n in range(20)]])
+        self.assertEqual(len(calls), 1)
+
+    def test_a_nearly_empty_page_falls_back_to_the_whole_catalogue(self) -> None:
+        """One candidate from three queries is how this failure actually looked."""
+        calls, found = self._run([[item("A0")], [item(f"B{n}") for n in range(12)]])
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("year_start", calls[1])
+        self.assertEqual(len(found), 5)
+
+    def test_the_fallback_does_not_repeat_a_work(self) -> None:
+        calls, found = self._run([[item("A0")], [item("A0"), item("B1"), item("B2")]])
+        ids = [c["candidate_id"] for c in found]
+        self.assertEqual(len(ids), len(set(ids)))
 
     def test_the_page_is_wide_enough_to_filter_from(self) -> None:
-        """Most results are discarded, so a narrow page leaves nothing behind."""
-        self.assertGreaterEqual(int(self._params()["page_size"]), 40)
+        calls, _ = self._run([[item(f"A{n}") for n in range(20)]])
+        self.assertGreaterEqual(int(calls[0]["page_size"]), 40)
 
     def test_only_video_is_requested(self) -> None:
-        self.assertEqual(self._params()["media_type"], "video")
+        calls, _ = self._run([[item(f"A{n}") for n in range(20)]])
+        self.assertEqual(calls[0]["media_type"], "video")
+
+
+class SubHdSetAsideTests(unittest.TestCase):
+    """A sub-HD work must not occupy a slot a usable work could have taken."""
+
+    def _search(self, sizes: list[tuple[int, int]]):
+        pages = [[item(f"A{n}") for n in range(len(sizes))]]
+        calls: list[dict] = []
+        metadata = iter([{"metadata_url": "", "source_width": w, "source_height": h,
+                          "source_duration": "0:01:00"} for w, h in sizes] * 4)
+
+        def get(url, params=None, timeout=None):
+            calls.append(dict(params or {}))
+            return FakeResponse({"collection": {"items": pages[0]}})
+
+        with patch("vps.source_catalog._SESSION.get", side_effect=get):
+            with patch("vps.source_catalog._asset_video_urls",
+                       return_value=(f"{BASE}~orig.mp4", f"{BASE}~preview.mp4", [])):
+                with patch("vps.source_catalog._asset_metadata", side_effect=lambda url: next(metadata)):
+                    return search_nasa_video_candidates("rocket launch", 3)
+
+    def test_sub_hd_works_are_skipped_while_hd_ones_remain(self) -> None:
+        found = self._search([(320, 212), (320, 212), (1920, 1080), (3840, 2160), (1920, 1080)])
+        self.assertEqual(len(found), 3)
+        for candidate in found:
+            self.assertGreaterEqual(candidate["source_width"], 1920)
+
+    def test_sub_hd_works_are_returned_when_nothing_else_exists(self) -> None:
+        """An empty list hides the reason; a rejected candidate states it."""
+        found = self._search([(320, 212), (640, 480)])
+        self.assertEqual(len(found), 2)
+        self.assertTrue(all(c["technical_status"] == "REJECT_BELOW_FHD" for c in found))
 
 
 if __name__ == "__main__":
