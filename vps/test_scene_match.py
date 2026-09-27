@@ -191,11 +191,12 @@ class ContactSheetTests(unittest.TestCase):
     """A description is only usable if each frame's second is known."""
 
     def test_the_frame_times_span_the_clip(self) -> None:
-        from .source_pool import sheet_frames
+        from .source_pool import SHEET_FRAMES, sheet_frames
         times = [frame["at_seconds"] for frame in sheet_frames(36.0)]
         self.assertEqual(times[0], 0.0)
         self.assertLess(times[-1], 36.0)
-        self.assertEqual(len(times), 12)
+        self.assertEqual(len(times), SHEET_FRAMES)
+        self.assertGreater(times[-1], 24.0)
 
     def test_a_short_clip_still_yields_several_frames(self) -> None:
         from .source_pool import sheet_frames
@@ -208,4 +209,12 @@ class ContactSheetTests(unittest.TestCase):
         url = describe_request([source], "https://worker.app/")[0]["contact_sheet_url"]
         self.assertIn("source-probes/contact-sheet.jpg", url)
         self.assertIn("candidate_end_seconds=36.000", url)
+        self.assertIn("samples=6", url)
         self.assertNotIn("//source-probes", url.replace("https://", ""))
+
+    def test_only_a_readable_number_of_sheets_is_sent(self) -> None:
+        """Past eight sheets the vision pass blurs one clip into the next."""
+        from .source_pool import MAX_DESCRIBED_WORKS, describe_request
+        sources = [{"candidate_id": f"A{n}", "direct_download_url": f"https://x/{n}.mp4",
+                    "measured_duration_seconds": 36.0} for n in range(14)]
+        self.assertEqual(len(describe_request(sources, "https://w.app")), MAX_DESCRIBED_WORKS)

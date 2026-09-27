@@ -18,3 +18,4 @@ hd-first-discovery-v1
 continuous-narration-v1
 brand-below-description-v1
 observed-footage-matching-v1
+contact-sheet-samples-v1

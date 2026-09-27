@@ -347,6 +347,7 @@ def public_source_probe_contact_sheet(
     source_url: str,
     candidate_start_seconds: float,
     candidate_end_seconds: float,
+    samples: int = 0,
 ):
     # This route exists because Make's image analyser can fetch an image URL but
     # the user's plan cannot run Make's generic HTTP module. It exposes only a
@@ -355,8 +356,11 @@ def public_source_probe_contact_sheet(
     if source_url == "MISSING":
         return Response(content=_MISSING_PROBE_PNG, media_type="image/png")
     try:
-        probe_id = source_probe_key(source_url, candidate_start_seconds, candidate_end_seconds)
-        result = create_source_probe(source_url, candidate_start_seconds, candidate_end_seconds, probe_id=probe_id)
+        wanted = max(0, min(12, int(samples)))
+        probe_id = source_probe_key(source_url, candidate_start_seconds,
+                                    candidate_end_seconds + wanted / 1000.0)
+        result = create_source_probe(source_url, candidate_start_seconds, candidate_end_seconds,
+                                     probe_id=probe_id, samples=wanted or None)
         path = probe_frame_path(result["probe_id"], result["contact_sheet_name"])
     except IngestError as exc:
         raise HTTPException(422, str(exc))

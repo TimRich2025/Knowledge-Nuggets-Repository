@@ -524,10 +524,14 @@ def build_source_pool(
     }
 
 
-# The public contact-sheet route extracts this many frames for a window and
-# spaces them evenly, so the times can be computed here rather than guessed.
-MAX_SHEET_FRAMES = 12
+# Frames per contact sheet. Six well-spaced stills describe a thirty-second
+# clip well enough to place a three-second window, and several six-tile sheets
+# are read far more accurately in one pass than several twelve-tile ones.
+SHEET_FRAMES = 6
 MAX_SHEET_SECONDS = 90.0
+# How many works are sent for description at once. Beyond this the vision pass
+# starts blurring one sheet into the next.
+MAX_DESCRIBED_WORKS = 8
 
 
 def sheet_frames(duration: float) -> list[dict[str, Any]]:
@@ -538,7 +542,7 @@ def sheet_frames(duration: float) -> list[dict[str, Any]]:
     belongs to. Without that a description is just a list of pictures.
     """
     window = min(float(duration), MAX_SHEET_SECONDS)
-    count = max(2, min(MAX_SHEET_FRAMES, int(window) + 1))
+    count = max(2, min(SHEET_FRAMES, int(window) + 1))
     period = window / count
     return [{"index": index + 1, "at_seconds": round(index * period, 3)}
             for index in range(count)]
@@ -547,14 +551,16 @@ def sheet_frames(duration: float) -> list[dict[str, Any]]:
 def describe_request(sources: list[dict[str, Any]], base_url: str) -> list[dict[str, Any]]:
     """Each discovered work with the picture evidence needed to judge it."""
     described = []
-    for source in sources:
+    for source in sources[:MAX_DESCRIBED_WORKS]:
         window = min(float(source["measured_duration_seconds"]), MAX_SHEET_SECONDS)
+        frames = sheet_frames(source["measured_duration_seconds"])
         query = urlencode({"source_url": source["direct_download_url"],
                            "candidate_start_seconds": "0",
-                           "candidate_end_seconds": f"{window:.3f}"})
+                           "candidate_end_seconds": f"{window:.3f}",
+                           "samples": len(frames)})
         described.append({**source,
                           "contact_sheet_url": f"{base_url.rstrip('/')}/source-probes/contact-sheet.jpg?{query}",
-                          "frames": sheet_frames(source["measured_duration_seconds"])})
+                          "frames": frames})
     return described
 
 

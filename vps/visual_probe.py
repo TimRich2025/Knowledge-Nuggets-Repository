@@ -33,6 +33,13 @@ def _safe_url(url: str) -> str:
     return url
 
 
+def _tile_grid(count: int) -> str:
+    """A grid that holds every frame without leaving a row of blanks."""
+    columns = 2 if count <= 4 else 3
+    rows = -(-count // columns)
+    return f"{columns}x{rows}"
+
+
 def _clean_old_probes() -> None:
     PROBE_ROOT.mkdir(parents=True, exist_ok=True)
     cutoff = time.time() - PROBE_TTL_SECONDS
@@ -78,7 +85,8 @@ def _existing_probe(probe_id: str, source_url: str, start: float, end: float, pe
     }
 
 
-def create_source_probe(source_url: str, start_seconds: float, end_seconds: float, probe_id: str | None = None) -> dict:
+def create_source_probe(source_url: str, start_seconds: float, end_seconds: float,
+                        probe_id: str | None = None, samples: int | None = None) -> dict:
     """Extract evenly spaced, small JPEG frames from a bounded candidate interval.
 
     This deliberately does not claim that an interval is semantically correct.  It
@@ -97,7 +105,10 @@ def create_source_probe(source_url: str, start_seconds: float, end_seconds: floa
     _clean_old_probes()
     probe_id = probe_id or uuid.uuid4().hex
     target = PROBE_ROOT / probe_id
-    sample_count = max(2, min(MAX_SAMPLES, int(window) + 1))
+    # A caller judging a whole clip wants a few well-spaced frames, not twelve;
+    # a sheet with fewer tiles is read far more accurately when several sheets
+    # are shown at once.
+    sample_count = max(2, min(MAX_SAMPLES, int(samples) if samples else int(window) + 1))
     period = window / sample_count
     existing = _existing_probe(probe_id, source_url, start, end, period)
     if existing:
@@ -123,7 +134,8 @@ def create_source_probe(source_url: str, start_seconds: float, end_seconds: floa
         sheet_cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-framerate", "1", "-i", str(target / "frame-%03d.jpg"),
-            "-frames:v", "1", "-vf", "scale=480:-2,tile=3x4:padding=4", "-q:v", "3", str(sheet),
+            "-frames:v", "1", "-vf", f"scale=480:-2,tile={_tile_grid(len(frames))}:padding=4",
+            "-q:v", "3", str(sheet),
         ]
         sheet_result = subprocess.run(sheet_cmd, capture_output=True, text=True, timeout=45)
         if sheet_result.returncode or not sheet.is_file():
