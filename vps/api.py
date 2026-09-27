@@ -132,6 +132,10 @@ class SourcePlanRequest(BaseModel):
     works: list[ObservedWork] = Field(default_factory=list, max_length=40)
     window_seconds: float = Field(default=3.2, ge=1.5, le=4.0)
     match_floor: float = Field(default=MATCH_FLOOR, ge=0.1, le=0.9)
+    # The last look there will be. A caller that can still run another vision
+    # pass leaves this false and is offered one; a caller that cannot sets it,
+    # and an unserved beat is then a refusal rather than another round.
+    final: bool = False
     callback_url: str | None = None
 
 class SocialMetadata(BaseModel):
@@ -354,8 +358,16 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
     When some beat has nothing, the call does not simply refuse. It searches
     again for what those beats ask for, adds the new works to the same pool and
     hands back their contact sheets, so the caller's next move is one more look
-    rather than a fresh start. Only when that has been tried does it give up,
-    and then it says which beats it could not serve.
+    rather than a fresh start.
+
+    The caller that drives this runs its second look whether or not it was
+    needed, because a linear flow cannot skip a step and carry on. So a call
+    that matched everything answers MATCHED and still offers something to look
+    at, the plan it produced is kept, and the second call is given that same
+    plan back: a pairing already made can never be unmade by a look that was
+    only taken for the sake of the flow. `final` says this is the last look
+    there will be, and then an unserved beat is a refusal rather than another
+    round.
     """
     if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
         auth(authorization)
@@ -368,7 +380,7 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
 
     key = f"kn:pool:{safe_id(payload.pool_id)}" if payload.pool_id else ""
     state = {"works": [work.model_dump() for work in payload.works],
-             "observations": {}, "rounds": 0}
+             "observations": {}, "rounds": 0, "plan": None}
     if key:
         stored = db().get(key)
         if not stored:
@@ -377,41 +389,53 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
         # An older pool held the works alone. Read both shapes so a run started
         # before this change can still finish.
         state = loaded if isinstance(loaded, dict) else {"works": loaded, "observations": {},
-                                                         "rounds": 0}
+                                                         "rounds": 0, "plan": None}
+    settled = state.get("plan")
+    if settled:
+        return {**settled, "status": "MATCHED"}
+
     described = {**state.get("observations", {}), **observation_map(incoming)}
     works = apply_observations(state.get("works", []), described)
     if not works:
         raise HTTPException(422, "supply either a pool_id with observations, or works in full")
 
+    def remember(**changed) -> None:
+        if key:
+            db().setex(key, POOL_TTL_SECONDS,
+                       json.dumps({**state, "observations": described, **changed}))
+
     try:
-        return plan_from_observations(beats, works, window_seconds=payload.window_seconds,
-                                      match_floor=payload.match_floor)
+        result = plan_from_observations(beats, works, window_seconds=payload.window_seconds,
+                                        match_floor=payload.match_floor)
     except UnmatchedBeats as exc:
         rounds = int(state.get("rounds", 0))
         fresh = []
-        if key and rounds < MAX_WIDENING_ROUNDS:
+        if key and not payload.final and rounds < MAX_WIDENING_ROUNDS:
             fresh = widen_for_beats(state.get("works", []), exc.retry_queries,
                                     public_base_url(request),
                                     window_seconds=payload.window_seconds)
         if fresh:
-            state = {"works": state.get("works", []) + fresh,
-                     "observations": described, "rounds": rounds + 1}
-            db().setex(key, POOL_TTL_SECONDS, json.dumps(state))
-            # 409, not 422: the request was well formed and the footage simply
-            # did not show what these beats need. The body is the next step.
-            raise HTTPException(409, {"detail": str(exc), "status": "LOOK_AGAIN",
-                                      "unmatched_beats": exc.unmatched,
-                                      "retry_queries": exc.retry_queries,
-                                      "round": rounds + 1,
-                                      "new_sources": fresh, **vision_payload(fresh)})
-        if key:
-            db().setex(key, POOL_TTL_SECONDS, json.dumps({**state, "observations": described}))
+            remember(works=state.get("works", []) + fresh, rounds=rounds + 1)
+            # 200, not an error: the request was well formed, the footage simply
+            # did not show what these beats need, and the body is the next step.
+            return {"status": "LOOK_AGAIN", "pool_id": payload.pool_id,
+                    "detail": str(exc), "unmatched_beats": exc.unmatched,
+                    "retry_queries": exc.retry_queries, "round": rounds + 1,
+                    "new_sources": fresh, "second_look": vision_payload(fresh)}
+        remember()
         raise HTTPException(409, {"detail": str(exc), "status": "NO_MATCHING_FOOTAGE",
                                   "unmatched_beats": exc.unmatched,
                                   "retry_queries": exc.retry_queries,
                                   "rounds_spent": rounds})
     except (SourcePoolError, ValueError) as exc:
         raise HTTPException(422, str(exc))
+
+    remember(plan=result)
+    if payload.final:
+        return {**result, "status": "MATCHED"}
+    # Something valid to look at, so the caller's unconditional second look is a
+    # well formed request. Its answer changes nothing: the plan above is kept.
+    return {**result, "status": "MATCHED", "second_look": vision_payload(works[:1])}
 
 @app.post("/social-metadata")
 def social_metadata(payload: SocialMetadata, authorization: str | None = Header(default=None)):

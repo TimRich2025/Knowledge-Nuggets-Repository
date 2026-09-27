@@ -18,6 +18,7 @@ on:
       - vps/scene_match.py
       - vps/storyboard.py
       - vps/test_scene_match.py
+      - vps/test_source_plan_rounds.py
       - vps/test_soundtrack.py
       - vps/test_source_pool.py
       - vps/local_renderer.py
@@ -59,6 +60,10 @@ jobs:
           test -f /usr/share/fonts/truetype/noto/NotoSansDisplay-ExtraCondensedBlack.ttf
           test -f /usr/share/fonts/truetype/noto/NotoSansDisplay-Light.ttf
           python -m pip install -r vps/requirements.txt
+          # The endpoint tests drive the app through fastapi's test client,
+          # which needs httpx. The worker itself does not, so it is installed
+          # here rather than carried in the image.
+          python -m pip install 'httpx<0.29'
       - name: Synthesize and verify all spoken words
         run: |
           python -m unittest vps.test_production_contract
@@ -70,6 +75,7 @@ jobs:
           python -m unittest vps.test_continuous_narration
           python -m unittest vps.test_soundtrack
           python -m unittest vps.test_scene_match
+          python -m unittest vps.test_source_plan_rounds
           python -m unittest vps.test_concat_tolerance
           python -m unittest vps.test_caption_layout
           python -m unittest vps.test_social_metadata
