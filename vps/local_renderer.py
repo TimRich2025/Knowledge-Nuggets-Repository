@@ -6,6 +6,7 @@ from layout_lock import (CAPTION_POP_SCALE, build_header, caption_layout, VIDEO_
                          HEADER_H, CAPTION_FONT_NAME, CAPTION_MARGIN,
                          caption_ass_fontsize)
 from .production_contract import concat_duration_tolerance, validate_measured_render_contract, validate_submission_contract
+from .soundtrack import audio_graph, available_tracks, pick_track
 
 class RenderError(RuntimeError): pass
 
@@ -283,10 +284,23 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
                   "equalizer=f=3000:t=q:w=0.9:g=2.0,"
                   "acompressor=threshold=0.10:ratio=2.2:attack=18:release=160:makeup=1.35:mix=0.85,"
                   "loudnorm=I=-15:TP=-1.5:LRA=8,volume=2dB,alimiter=limit=0.89")
-    run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(lower),"-loop","1","-i",str(header),"-i",str(audio),
-         "-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-map","2:a:0","-t",f"{audio_dur:.3f}","-c:v","libx264","-threads","2","-preset","veryfast","-crf","16",
-         "-pix_fmt","yuv420p","-af",studio_voice,"-ac","2","-ar","48000",
-         "-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)],360)
+    # A licensed bed when one is available, and the bare voice when it is not.
+    # A missing soundtrack must never fail a finished Short.
+    track=pick_track(str(job.get("content_id") or ""),available_tracks())
+    command=["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(lower),
+             "-loop","1","-i",str(header),"-i",str(audio)]
+    if track is not None:
+        command += ["-i",str(track)]
+        graph=fc+";"+audio_graph(studio_voice,audio_dur)
+        command += ["-filter_complex_threads","1","-filter_complex",graph,
+                    "-map","[v]","-map","[a]"]
+    else:
+        command += ["-filter_complex_threads","1","-filter_complex",fc,
+                    "-map","[v]","-map","2:a:0","-af",studio_voice]
+    command += ["-t",f"{audio_dur:.3f}","-c:v","libx264","-threads","2","-preset","veryfast",
+                "-crf","16","-pix_fmt","yuv420p","-ac","2","-ar","48000",
+                "-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)]
+    run(command,360)
 
     frame=job_dir/"qc_frame.png"
     run(["ffmpeg","-hide_banner","-loglevel","error","-y","-ss","0.3","-i",str(out),"-frames:v","1",str(frame)],60)

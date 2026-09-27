@@ -37,13 +37,14 @@ QUESTION_LINE2_Y=QUESTION_LINE1_Y+QUESTION_LINE_STEP
 QUESTION_SIZE=86
 QUESTION_MAX_W=880
 
-# The mark sits low and centred, clear of the channel row at UI_BOTTOM_Y. It is
-# kept small on purpose: the source asset is only 48x49px, so every extra pixel
-# of height is visible enlargement.
-FOOTER_FADE_TOP=1400
+# The mark sits below YouTube's own description block rather than level with
+# where it begins, in the strip above the progress bar. That strip is narrow and
+# a device with taller furniture can cover part of it; this position is the one
+# chosen for the brand, not the one with the most clearance.
+FOOTER_FADE_TOP=1500
 LOGO_H=76
-LOGO_Y=1580
-BRAND_Y=1676
+LOGO_Y=1700
+BRAND_Y=1790
 BRAND_SIZE=21
 BRAND_TRACKING=5.5
 
@@ -57,7 +58,9 @@ CAPTION_LINE_STEP=72
 # reserve space for the size it was measured at. Anything at or below 1.0 keeps
 # the guarantee that caption_layout makes.
 CAPTION_POP_SCALE=0.90
-CAPTION_CENTRE_Y=round(HEADER_H+0.58*(LOGO_Y-HEADER_H))
+# Pinned rather than derived from LOGO_Y. The captions were placed by eye and
+# approved there; moving the mark must not drag them along with it.
+CAPTION_CENTRE_Y=1128
 CAPTION_MAX_W=CANVAS_W-2*CAPTION_MARGIN
 CAPTION_WORD_SPACE=1.0
 

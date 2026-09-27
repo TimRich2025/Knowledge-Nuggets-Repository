@@ -72,6 +72,24 @@ What is measured is the interval, not the content: a beat is described from its
 work's catalogue title. The pool carries each work's official storyboard frames
 so a later vision pass can look before a beat claims what it shows.
 
+## Soundtrack
+
+No track ships with this repository. The renderer plays whatever licensed audio
+sits in the music directory, `KN_MUSIC_DIR` (default `/data/music`), and renders
+without a bed when the directory is empty, because a missing soundtrack is never
+a reason to fail a finished Short.
+
+One track is chosen per Short by hashing its content id, so a re-render sounds
+identical and consecutive Shorts move through the library. The track is looped
+to the narration's length, faded at both ends, set to `KN_MUSIC_GAIN_DB`
+(default -19) and then ducked by the finished narration: measured against a
+spoken passage the bed dips 11.5 dB while a word is being said and comes back in
+the pause. A steeper setting reached 24 dB, which reads as the music switching
+off and on rather than as it making room.
+
+Put only audio you are licensed to publish on YouTube in that directory.
+Nothing in this pipeline checks a licence.
+
 ## Deploy
 
 Copy `.env.example` to `.env`, set a long `KN_API_TOKEN`, then:
