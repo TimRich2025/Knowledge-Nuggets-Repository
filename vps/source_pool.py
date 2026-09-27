@@ -556,6 +556,11 @@ def vision_payload(described: list[dict[str, Any]]) -> dict[str, Any]:
     """
     images = [{"imageUploadType": "url", "imageUrl": work["contact_sheet_url"]}
               for work in described]
+    # Gemini takes public URLs as file parts. Shaped here so a scenario never has
+    # to build an array of objects out of a list of strings.
+    parts = [{"type": "file",
+              "file_data": {"mime_type": "image/jpeg", "file_uri": work["contact_sheet_url"]}}
+             for work in described]
     lines = []
     for position, work in enumerate(described, 1):
         seconds = ", ".join(f"{frame['index']}={frame['at_seconds']:.1f}s"
@@ -563,7 +568,8 @@ def vision_payload(described: list[dict[str, Any]]) -> dict[str, Any]:
         lines.append(f"IMAGE {position}: work {work['candidate_id']}, titled "
                      f"\"{work.get('title', '')}\". Its tiles read left to right, "
                      f"top to bottom, at these seconds of the clip: {seconds}.")
-    return {"vision_images": images, "vision_context": "\n".join(lines)}
+    return {"vision_images": images, "gemini_parts": parts,
+            "vision_context": "\n".join(lines)}
 
 
 def describe_request(sources: list[dict[str, Any]], base_url: str) -> list[dict[str, Any]]:

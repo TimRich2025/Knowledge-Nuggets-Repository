@@ -288,3 +288,12 @@ class ToleranceTests(unittest.TestCase):
         from .source_pool import loads_tolerant
         for value in ("not json", "", None, "{{broken}}"):
             self.assertEqual(loads_tolerant(value), [])
+
+    def test_the_images_are_shaped_for_both_vision_modules(self) -> None:
+        """Gemini wants file parts, the OpenAI module wants url objects."""
+        from .source_pool import vision_payload
+        payload = vision_payload(self._described())
+        self.assertEqual(payload["gemini_parts"][0]["type"], "file")
+        self.assertEqual(payload["gemini_parts"][0]["file_data"]["mime_type"], "image/jpeg")
+        self.assertEqual(payload["gemini_parts"][0]["file_data"]["file_uri"],
+                         payload["vision_images"][0]["imageUrl"])
