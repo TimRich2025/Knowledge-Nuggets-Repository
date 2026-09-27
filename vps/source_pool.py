@@ -190,15 +190,21 @@ def collect_sources(
         except SourceCatalogError as exc:
             failures.append(f"{query}: {exc}")
             continue
+        rejected["candidates offered"] += len(candidates)
         kept = 0
         for candidate in candidates:
             if kept >= max_per_segment:
                 break
             key = str(candidate.get("candidate_id") or "")
-            if not key or key in seen:
+            if not key:
+                rejected["no catalogue id"] += 1
+                continue
+            if key in seen:
+                rejected["already used by an earlier segment"] += 1
                 continue
             direct = str(candidate.get("direct_download_url") or "")
             if not direct:
+                rejected["no direct video file"] += 1
                 continue
             if candidate.get("technical_status") == "REJECT_BELOW_FHD":
                 rejected["below Full HD"] += 1
@@ -242,20 +248,28 @@ def collect_sources(
                 "height": height,
                 "measured_duration_seconds": round(duration, 2),
             })
+    summary = rejection_summary(rejected, smallest_rejected)
     if not sources:
-        detail = "; ".join(failures + [rejection_summary(rejected, smallest_rejected)])
-        raise SourcePoolError(f"no usable source was found for any segment ({detail.strip('; ')})")
-    collect_sources.last_rejections = rejection_summary(rejected, smallest_rejected)
+        detail = "; ".join([part for part in failures + [summary] if part])
+        raise SourcePoolError(f"no usable source was found for any segment ({detail})")
+    collect_sources.last_rejections = summary
     return sources
 
 
 def rejection_summary(rejected: Counter, smallest: str) -> str:
-    if not rejected:
-        return ""
+    """Say what the searches returned and where each candidate went.
+
+    A short pool with no explanation is indistinguishable from an empty
+    catalogue, and this string is the only place anyone will read the
+    difference.
+    """
+    offered = rejected.pop("candidates offered", 0)
     parts = [f"{count} {reason}" for reason, count in rejected.most_common()]
-    if smallest:
-        parts[0] += f" (e.g. {smallest})"
-    return "rejected " + ", ".join(parts)
+    for index, part in enumerate(parts):
+        if "below Full HD" in part and smallest:
+            parts[index] = f"{part} (e.g. {smallest})"
+    head = f"the searches offered {offered} candidates"
+    return head + ("; dropped " + ", ".join(parts) if parts else "; none were dropped by a gate")
 
 
 def assign_beats(

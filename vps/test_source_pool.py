@@ -366,3 +366,33 @@ class RejectionReportingTests(unittest.TestCase):
         with self.assertRaises(SourcePoolError) as caught:
             build_source_pool(SEGMENTS, search=search, measure=lambda url: (4.0, 1920, 1080))
         self.assertIn("shorter than", str(caught.exception))
+
+
+class CandidateAccountingTests(unittest.TestCase):
+    """A short pool must account for every candidate the searches returned."""
+
+    def test_the_error_reports_how_many_candidates_were_offered(self) -> None:
+        def search(query, limit):
+            return [{**candidate(asset), "source_width": 1630, "source_height": 1080}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        with self.assertRaises(SourcePoolError) as caught:
+            build_source_pool(SEGMENTS, search=search, measure=lambda url: (90.0, 1630, 1080))
+        self.assertIn("the searches offered 8 candidates", str(caught.exception))
+
+    def test_an_empty_catalogue_is_distinguishable_from_a_filtered_one(self) -> None:
+        with self.assertRaises(SourcePoolError) as caught:
+            build_source_pool(SEGMENTS, search=lambda q, n: [],
+                              measure=lambda url: (90.0, 1920, 1080))
+        message = str(caught.exception)
+        self.assertIn("offered 0 candidates", message)
+        self.assertIn("none were dropped by a gate", message)
+
+    def test_a_candidate_without_a_video_file_is_counted(self) -> None:
+        def search(query, limit):
+            return [{**candidate(asset), "direct_download_url": ""}
+                    for asset in CATALOGUE.get(query, [])][:limit]
+
+        with self.assertRaises(SourcePoolError) as caught:
+            build_source_pool(SEGMENTS, search=search, measure=lambda url: (90.0, 1920, 1080))
+        self.assertIn("no direct video file", str(caught.exception))
