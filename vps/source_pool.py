@@ -22,7 +22,8 @@ from typing import Any, Callable
 from .production_contract import (MAX_CONSECUTIVE_SCENES_PER_SOURCE,
                                   MAX_SOURCE_SHARE, MIN_DISTINCT_SOURCES,
                                   scene_source_key, validate_source_diversity)
-from .source_catalog import SourceCatalogError, search_nasa_video_candidates
+from .source_catalog import (SourceCatalogError, is_full_hd, probe_stream,
+                             search_nasa_video_candidates)
 
 
 # NASA clips routinely open on a slate or a static countdown card and close on
@@ -35,7 +36,6 @@ DEFAULT_WINDOW_SECONDS = 2.3
 # Two windows from one work must not overlap, or the Short repeats itself
 # inside a single source.
 MIN_WINDOW_SEPARATION = 0.4
-PROBE_TIMEOUT_SECONDS = 40
 # More windows than the share cap will ever let one work spend.
 MAX_WINDOWS_PER_SOURCE = 8
 # Every kept candidate costs a catalogue round trip and sometimes a header
@@ -67,6 +67,103 @@ def catalogue_page_url(candidate: dict[str, Any]) -> str:
     if page.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png")):
         return str(candidate.get("asset_listing_url") or page)
     return page or str(candidate.get("asset_listing_url") or "")
+
+
+def parse_catalogue_duration(value: object) -> float:
+    """Read the catalogue's own duration string, when it published a usable one.
+
+    NASA writes it as "0:00:47", "47.50 s" or simply a number, depending on the
+    asset.  Anything else is treated as absent, because a wrong length would
+    place a window past the end of the clip.
+    """
+    text = str(value or "").strip().replace("s", "").strip()
+    if not text:
+        return 0.0
+    try:
+        if ":" in text:
+            seconds = 0.0
+            for part in text.split(":"):
+                seconds = seconds * 60 + float(part)
+            return seconds
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def parse_catalogue_duration(value: object) -> float:
+    """Read the catalogue's own duration string, when it published a usable one.
+
+    NASA writes it as "0:00:47", "47.50 s" or simply a number, depending on the
+    asset.  Anything else is treated as absent, because a wrong length would
+    place a window past the end of the clip.
+    """
+    text = str(value or "").strip().replace("s", "").strip()
+    if not text:
+        return 0.0
+    try:
+        if ":" in text:
+            seconds = 0.0
+            for part in text.split(":"):
+                seconds = seconds * 60 + float(part)
+            return seconds
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def probe_stream(url: str) -> tuple[float, int, int]:
+    """Read a remote clip's real length and frame size from its own header.
+
+    The catalogue's duration is free text and its pixel dimensions are often
+    absent altogether, and a clip that turns out to be 1630x1080 fails the
+    renderer's Full HD gate after the whole job has been assembled. So where
+    the catalogue is silent, the decoder answers.
+    """
+    try:
+        output = subprocess.run(
+            ["ffprobe", "-v", "error",
+             # The same HTTP identity the ingest uses. Without them the
+             # catalogue answers 403 and every clip reads as unmeasurable.
+             "-user_agent", "KnowledgeNuggetsSourceIngest/4.0",
+             "-referer", "https://images.nasa.gov/",
+             "-rw_timeout", "20000000",
+             "-select_streams", "v:0",
+             "-show_entries", "stream=width,height:format=duration",
+             "-of", "json", url],
+            capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=True,
+        ).stdout
+        payload = json.loads(output)
+        stream = (payload.get("streams") or [{}])[0]
+        return (float(payload.get("format", {}).get("duration") or 0),
+                int(stream.get("width") or 0), int(stream.get("height") or 0))
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError, IndexError):
+        return 0.0, 0, 0
+
+
+def probe_duration(url: str) -> float:
+    """The clip's length alone, for callers that do not need its frame size."""
+    return probe_stream(url)[0]
+
+
+def parse_catalogue_duration(value: object) -> float:
+    """Read the catalogue's own duration string, when it published a usable one.
+
+    NASA writes it as "0:00:47", "47.50 s" or simply a number, depending on the
+    asset.  Anything else is treated as absent, because a wrong length would
+    place a window past the end of the clip.
+    """
+    text = str(value or "").strip().replace("s", "").strip()
+    if not text:
+        return 0.0
+    try:
+        if ":" in text:
+            seconds = 0.0
+            for part in text.split(":"):
+                seconds = seconds * 60 + float(part)
+            return seconds
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def parse_catalogue_duration(value: object) -> float:

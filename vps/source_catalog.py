@@ -7,7 +7,9 @@ NASA video candidates that can subsequently be probed frame by frame.
 """
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -18,6 +20,10 @@ NASA_IMAGES_SEARCH = "https://images-api.nasa.gov/search"
 # Largest first; an asset without ~orig still has a usable ~large.
 VIDEO_SIZE_ORDER = ("~orig", "~large", "~medium", "~small", "~preview")
 MAX_CANDIDATES = 24
+# Measuring a work whose catalogue entry is silent costs one header read, so
+# the scan stops after this many rather than spending a whole HTTP timeout
+# budget on a subject the catalogue only holds in standard definition.
+MAX_MEASUREMENTS_PER_SEARCH = 14
 # NASA published standard definition for decades. A 2004 asset is genuinely
 # 320x212 and can never pass the renderer's Full HD gate, so asking for it
 # wastes a catalogue round trip and a header read. HD became the norm well
@@ -27,8 +33,47 @@ _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "KnowledgeNuggetsSourceCatalog/1.0"})
 
 
+# One bounded header read. The window the ingest later cuts is fetched the
+# same way, so a clip that answers here will answer then.
+PROBE_TIMEOUT_SECONDS = 40
+
+
 class SourceCatalogError(RuntimeError):
     pass
+
+
+def is_full_hd(width: int, height: int) -> bool:
+    """The renderer's own gate, applied during discovery so nothing is built to fail it."""
+    return (width >= 1920 and height >= 1080) or (height >= 1920 and width >= 1080)
+
+
+def probe_stream(url: str) -> tuple[float, int, int]:
+    """Read a remote clip's real length and frame size from its own header.
+
+    The catalogue's duration is free text and its pixel dimensions are often
+    absent altogether, and a clip that turns out to be 320x212 fails the
+    renderer's Full HD gate after the whole job has been assembled. So where
+    the catalogue is silent, the decoder answers.
+    """
+    try:
+        output = subprocess.run(
+            ["ffprobe", "-v", "error",
+             # The same HTTP identity the ingest uses. Without them the
+             # catalogue answers 403 and every clip reads as unmeasurable.
+             "-user_agent", "KnowledgeNuggetsSourceIngest/4.0",
+             "-referer", "https://images.nasa.gov/",
+             "-rw_timeout", "20000000",
+             "-select_streams", "v:0",
+             "-show_entries", "stream=width,height:format=duration",
+             "-of", "json", url],
+            capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=True,
+        ).stdout
+        payload = json.loads(output)
+        stream = (payload.get("streams") or [{}])[0]
+        return (float(payload.get("format", {}).get("duration") or 0),
+                int(stream.get("width") or 0), int(stream.get("height") or 0))
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError, IndexError):
+        return 0.0, 0, 0
 
 
 def _approved_nasa_url(url: str) -> bool:
@@ -133,7 +178,8 @@ def _search_items(query: str, requested: int, earliest_year: int | None) -> list
 
 
 def search_nasa_video_candidates(query: str, limit: int = 6,
-                                 earliest_year: int = DEFAULT_EARLIEST_YEAR) -> list[dict[str, Any]]:
+                                 earliest_year: int = DEFAULT_EARLIEST_YEAR,
+                                 measure=probe_stream) -> list[dict[str, Any]]:
     """Return unverified direct NASA video candidates for later frame review.
 
     No returned object has `semantic_match=EXACT`, `temporal_match=VERIFIED`,
@@ -156,6 +202,7 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
 
     candidates: list[dict[str, Any]] = []
     below_hd: list[dict[str, Any]] = []
+    measured = 0
     for item in items:
         if len(candidates) >= requested:
             break
@@ -172,6 +219,16 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
             continue
         technical = _asset_metadata(asset_listing)
         fhd = _fhd_or_higher(technical["source_width"], technical["source_height"])
+        if fhd is None and measured < MAX_MEASUREMENTS_PER_SEARCH:
+            # Most NASA video assets publish no metadata.json, so without this
+            # the sub-HD ones look eligible and occupy every slot. One header
+            # read settles it here, where the loop can simply scan further.
+            measured += 1
+            duration, width, height = measure(direct_url)
+            if width and height:
+                technical = {**technical, "source_width": width, "source_height": height,
+                             "source_duration": technical["source_duration"] or f"{duration:.2f}"}
+                fhd = _fhd_or_higher(width, height)
         record = {
             "candidate_id": nasa_id,
             "source_family": "NASA Images",

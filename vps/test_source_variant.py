@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from .source_catalog import (DEFAULT_EARLIEST_YEAR, _asset_video_urls,
-                             search_nasa_video_candidates)
+from .source_catalog import (DEFAULT_EARLIEST_YEAR, MAX_MEASUREMENTS_PER_SEARCH,
+                             _asset_video_urls, search_nasa_video_candidates)
 
 
 class FakeResponse:
@@ -145,3 +145,50 @@ class SubHdSetAsideTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SilentMetadataTests(unittest.TestCase):
+    """Most NASA video assets publish no metadata.json. Measure, do not assume."""
+
+    def _search(self, measured: list[tuple[int, int]], limit: int = 3):
+        pages = [[item(f"A{n}") for n in range(len(measured))]]
+        sizes = iter(measured)
+        reads: list[str] = []
+
+        def measure(url):
+            reads.append(url)
+            width, height = next(sizes)
+            return 60.0, width, height
+
+        def get(url, params=None, timeout=None):
+            return FakeResponse({"collection": {"items": pages[0]}})
+
+        with patch("vps.source_catalog._SESSION.get", side_effect=get):
+            with patch("vps.source_catalog._asset_video_urls",
+                       return_value=(f"{BASE}~orig.mp4", f"{BASE}~preview.mp4", [])):
+                with patch("vps.source_catalog._asset_metadata",
+                           return_value={"metadata_url": "", "source_width": 0,
+                                         "source_height": 0, "source_duration": ""}):
+                    found = search_nasa_video_candidates("rocket launch", limit, measure=measure)
+        return found, reads
+
+    def test_a_silent_entry_is_measured_and_its_size_recorded(self) -> None:
+        found, reads = self._search([(1920, 1080)], limit=1)
+        self.assertEqual(len(reads), 1)
+        self.assertEqual(found[0]["source_width"], 1920)
+        self.assertEqual(found[0]["technical_status"], "ELIGIBLE_FHD_OR_HIGHER")
+
+    def test_a_measured_sub_hd_work_does_not_occupy_a_slot(self) -> None:
+        """Nine of ten candidates measured 320x212 and filled every slot."""
+        found, _ = self._search([(320, 212), (320, 212), (1920, 1080), (3840, 2160)], limit=2)
+        self.assertEqual(len(found), 2)
+        for candidate in found:
+            self.assertGreaterEqual(candidate["source_width"], 1920)
+
+    def test_measuring_stops_before_it_eats_the_request_budget(self) -> None:
+        found, reads = self._search([(320, 212)] * 30, limit=5)
+        self.assertLessEqual(len(reads), MAX_MEASUREMENTS_PER_SEARCH)
+
+    def test_an_unmeasurable_entry_stays_unverified_rather_than_eligible(self) -> None:
+        found, _ = self._search([(0, 0)], limit=1)
+        self.assertEqual(found[0]["technical_status"], "UNVERIFIED_TECHNICAL_METADATA")
