@@ -16,6 +16,7 @@ on:
       - vps/test_continuous_narration.py
       - vps/soundtrack.py
       - vps/scene_match.py
+      - vps/storyboard.py
       - vps/test_scene_match.py
       - vps/test_soundtrack.py
       - vps/test_source_pool.py

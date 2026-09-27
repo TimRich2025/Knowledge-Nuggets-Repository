@@ -16,6 +16,7 @@ from .source_pool import (SourcePoolError, build_source_pool, collect_sources,
                           loads_tolerant, plan_from_observations, probe_stream,
                           vision_payload)
 from .scene_match import MATCH_FLOOR
+from .storyboard import StoryboardError, sheet_path
 from .social_metadata import MetadataError, build_social_metadata
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
@@ -296,6 +297,21 @@ def source_pool(payload: SourcePoolRequest, request: Request, authorization: str
         raise HTTPException(422, str(exc))
     except SourceCatalogError as exc:
         raise HTTPException(502, str(exc))
+
+@app.get("/storyboards/{identifier}.jpg")
+def storyboard_sheet(identifier: str, request: Request):
+    """Serve a prebuilt sheet of catalogue stills.
+
+    Public and unauthenticated for the same reason the contact-sheet route is:
+    the vision pass fetches it by URL and carries no credential. It exposes
+    nothing but a tiling of images the catalogue already publishes openly.
+    """
+    allow_public_probe(request)
+    try:
+        return FileResponse(sheet_path(identifier), media_type="image/jpeg",
+                            filename=f"{identifier}.jpg")
+    except StoryboardError as exc:
+        raise HTTPException(404, str(exc))
 
 @app.post("/source-pool/candidates")
 def source_pool_candidates(payload: SourcePoolRequest, request: Request,

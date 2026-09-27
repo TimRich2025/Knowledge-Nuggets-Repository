@@ -190,34 +190,47 @@ class ObservationPlanTests(unittest.TestCase):
 class ContactSheetTests(unittest.TestCase):
     """A description is only usable if each frame's second is known."""
 
-    def test_the_frame_times_span_the_clip(self) -> None:
-        from .source_pool import SHEET_FRAMES, sheet_frames
-        times = [frame["at_seconds"] for frame in sheet_frames(36.0)]
-        self.assertEqual(times[0], 0.0)
+    def test_the_still_times_spread_across_the_clip(self) -> None:
+        from .storyboard import assumed_times
+        times = assumed_times(6, 36.0)
+        self.assertEqual(len(times), 6)
+        self.assertGreater(times[0], 0.0)
         self.assertLess(times[-1], 36.0)
-        self.assertEqual(len(times), SHEET_FRAMES)
-        self.assertGreater(times[-1], 24.0)
+        self.assertGreater(times[-1] - times[0], 24.0)
 
-    def test_a_short_clip_still_yields_several_frames(self) -> None:
-        from .source_pool import sheet_frames
-        self.assertGreaterEqual(len(sheet_frames(8.0)), 2)
+    def test_the_stills_are_evenly_spaced(self) -> None:
+        """The catalogue publishes them that way; nothing here measures it."""
+        from .storyboard import assumed_times
+        times = assumed_times(5, 30.0)
+        gaps = [round(b - a, 3) for a, b in zip(times, times[1:])]
+        self.assertEqual(len(set(gaps)), 1)
 
-    def test_the_sheet_url_carries_the_clip_and_its_window(self) -> None:
+    def test_the_sheet_is_served_from_a_prebuilt_file(self) -> None:
+        """A sheet generated on request timed the vision pass out with a 404."""
         from .source_pool import describe_request
-        source = {"candidate_id": "A", "direct_download_url": "https://x/a.mp4",
-                  "measured_duration_seconds": 36.0}
-        url = describe_request([source], "https://worker.app/")[0]["contact_sheet_url"]
-        self.assertIn("source-probes/contact-sheet.jpg", url)
-        self.assertIn("candidate_end_seconds=36.000", url)
-        self.assertIn("samples=6", url)
-        self.assertNotIn("//source-probes", url.replace("https://", ""))
+        source = {"candidate_id": "A", "measured_duration_seconds": 36.0,
+                  "review_frame_urls": ["https://x/1.jpg", "https://x/2.jpg"]}
+        url = describe_request([source], "https://worker.app/",
+                               build=lambda urls: ("b" * 32, 2))[0]["contact_sheet_url"]
+        self.assertEqual(url, "https://worker.app/storyboards/" + "b" * 32 + ".jpg")
+
+    def test_a_work_without_catalogue_stills_is_left_out(self) -> None:
+        from .source_pool import describe_request
+        from .storyboard import StoryboardError
+
+        def refuse(urls):
+            raise StoryboardError("no stills")
+
+        source = {"candidate_id": "A", "measured_duration_seconds": 36.0, "review_frame_urls": []}
+        self.assertEqual(describe_request([source], "https://w.app", build=refuse), [])
 
     def test_only_a_readable_number_of_sheets_is_sent(self) -> None:
         """Past eight sheets the vision pass blurs one clip into the next."""
         from .source_pool import MAX_DESCRIBED_WORKS, describe_request
-        sources = [{"candidate_id": f"A{n}", "direct_download_url": f"https://x/{n}.mp4",
-                    "measured_duration_seconds": 36.0} for n in range(14)]
-        self.assertEqual(len(describe_request(sources, "https://w.app")), MAX_DESCRIBED_WORKS)
+        sources = [{"candidate_id": f"A{n}", "measured_duration_seconds": 36.0,
+                    "review_frame_urls": ["https://x/1.jpg"]} for n in range(14)]
+        described = describe_request(sources, "https://w.app", build=lambda urls: ("c" * 32, 5))
+        self.assertEqual(len(described), MAX_DESCRIBED_WORKS)
 
 
 class ObservationMergeTests(unittest.TestCase):
@@ -228,8 +241,10 @@ class ObservationMergeTests(unittest.TestCase):
         return describe_request([{"candidate_id": "A", "title": "Launch",
                                   "direct_download_url": "https://images-assets.nasa.gov/video/A/A~orig.mp4",
                                   "selected_asset_page_url": "https://images.nasa.gov/details/A",
+                                  "review_frame_urls": [f"https://x/A~medium_{n}.jpg" for n in range(1, 7)],
                                   "width": 1920, "height": 1080,
-                                  "measured_duration_seconds": 36.0}], "https://worker.app")
+                                  "measured_duration_seconds": 36.0}], "https://worker.app",
+                                build=lambda urls: ("a" * 32, 6))
 
     def test_a_description_lands_on_the_right_frame(self) -> None:
         from .source_pool import merge_observations
@@ -268,7 +283,7 @@ class ObservationMergeTests(unittest.TestCase):
         self.assertEqual(len(payload["vision_images"]), 1)
         self.assertEqual(payload["vision_images"][0]["imageUploadType"], "url")
         self.assertIn("IMAGE 1: work A", payload["vision_context"])
-        self.assertIn("1=0.0s", payload["vision_context"])
+        self.assertIn("1=3.0s", payload["vision_context"])
 
 
 class ToleranceTests(unittest.TestCase):

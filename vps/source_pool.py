@@ -26,6 +26,7 @@ from .production_contract import (MAX_CONSECUTIVE_SCENES_PER_SOURCE,
 from .scene_match import MATCH_FLOOR, plan_by_content, terms, window_terms
 from .source_catalog import (SourceCatalogError, is_full_hd, probe_stream,
                              search_nasa_video_candidates)
+from .storyboard import StoryboardError, assumed_times, ensure_sheet
 
 
 # NASA clips routinely open on a slate or a static countdown card and close on
@@ -572,19 +573,26 @@ def vision_payload(described: list[dict[str, Any]]) -> dict[str, Any]:
             "vision_context": "\n".join(lines)}
 
 
-def describe_request(sources: list[dict[str, Any]], base_url: str) -> list[dict[str, Any]]:
-    """Each discovered work with the picture evidence needed to judge it."""
+def describe_request(sources: list[dict[str, Any]], base_url: str,
+                     build=ensure_sheet) -> list[dict[str, Any]]:
+    """Each discovered work with a sheet of stills the vision pass can read.
+
+    The sheet is built here, not when the URL is first requested. A sheet cut
+    from the video itself takes tens of seconds and the vision pass gave up
+    after three minutes with a 404; a sheet tiled from the catalogue's own
+    published stills exists before anything asks for it.
+    """
     described = []
     for source in sources[:MAX_DESCRIBED_WORKS]:
-        window = min(float(source["measured_duration_seconds"]), MAX_SHEET_SECONDS)
-        frames = sheet_frames(source["measured_duration_seconds"])
-        query = urlencode({"source_url": source["direct_download_url"],
-                           "candidate_start_seconds": "0",
-                           "candidate_end_seconds": f"{window:.3f}",
-                           "samples": len(frames)})
+        try:
+            identifier, tiles = build(source.get("review_frame_urls") or [])
+        except StoryboardError:
+            continue
+        times = assumed_times(tiles, source["measured_duration_seconds"])
         described.append({**source,
-                          "contact_sheet_url": f"{base_url.rstrip('/')}/source-probes/contact-sheet.jpg?{query}",
-                          "frames": frames})
+                          "contact_sheet_url": f"{base_url.rstrip('/')}/storyboards/{identifier}.jpg",
+                          "frames": [{"index": index + 1, "at_seconds": at}
+                                     for index, at in enumerate(times)]})
     return described
 
 
