@@ -109,142 +109,6 @@ def parse_catalogue_duration(value: object) -> float:
         return 0.0
 
 
-def parse_catalogue_duration(value: object) -> float:
-    """Read the catalogue's own duration string, when it published a usable one.
-
-    NASA writes it as "0:00:47", "47.50 s" or simply a number, depending on the
-    asset.  Anything else is treated as absent, because a wrong length would
-    place a window past the end of the clip.
-    """
-    text = str(value or "").strip().replace("s", "").strip()
-    if not text:
-        return 0.0
-    try:
-        if ":" in text:
-            seconds = 0.0
-            for part in text.split(":"):
-                seconds = seconds * 60 + float(part)
-            return seconds
-        return float(text)
-    except ValueError:
-        return 0.0
-
-
-def probe_stream(url: str) -> tuple[float, int, int]:
-    """Read a remote clip's real length and frame size from its own header.
-
-    The catalogue's duration is free text and its pixel dimensions are often
-    absent altogether, and a clip that turns out to be 1630x1080 fails the
-    renderer's Full HD gate after the whole job has been assembled. So where
-    the catalogue is silent, the decoder answers.
-    """
-    try:
-        output = subprocess.run(
-            ["ffprobe", "-v", "error",
-             # The same HTTP identity the ingest uses. Without them the
-             # catalogue answers 403 and every clip reads as unmeasurable.
-             "-user_agent", "KnowledgeNuggetsSourceIngest/4.0",
-             "-referer", "https://images.nasa.gov/",
-             "-rw_timeout", "20000000",
-             "-select_streams", "v:0",
-             "-show_entries", "stream=width,height:format=duration",
-             "-of", "json", url],
-            capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=True,
-        ).stdout
-        payload = json.loads(output)
-        stream = (payload.get("streams") or [{}])[0]
-        return (float(payload.get("format", {}).get("duration") or 0),
-                int(stream.get("width") or 0), int(stream.get("height") or 0))
-    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError, IndexError):
-        return 0.0, 0, 0
-
-
-def probe_duration(url: str) -> float:
-    """The clip's length alone, for callers that do not need its frame size."""
-    return probe_stream(url)[0]
-
-
-def parse_catalogue_duration(value: object) -> float:
-    """Read the catalogue's own duration string, when it published a usable one.
-
-    NASA writes it as "0:00:47", "47.50 s" or simply a number, depending on the
-    asset.  Anything else is treated as absent, because a wrong length would
-    place a window past the end of the clip.
-    """
-    text = str(value or "").strip().replace("s", "").strip()
-    if not text:
-        return 0.0
-    try:
-        if ":" in text:
-            seconds = 0.0
-            for part in text.split(":"):
-                seconds = seconds * 60 + float(part)
-            return seconds
-        return float(text)
-    except ValueError:
-        return 0.0
-
-
-def parse_catalogue_duration(value: object) -> float:
-    """Read the catalogue's own duration string, when it published a usable one.
-
-    NASA writes it as "0:00:47", "47.50 s" or simply a number, depending on the
-    asset.  Anything else is treated as absent, because a wrong length would
-    place a window past the end of the clip.
-    """
-    text = str(value or "").strip().replace("s", "").strip()
-    if not text:
-        return 0.0
-    try:
-        if ":" in text:
-            seconds = 0.0
-            for part in text.split(":"):
-                seconds = seconds * 60 + float(part)
-            return seconds
-        return float(text)
-    except ValueError:
-        return 0.0
-
-
-def probe_stream(url: str) -> tuple[float, int, int]:
-    """Read a remote clip's real length and frame size from its own header.
-
-    The catalogue's duration is free text and its pixel dimensions are often
-    absent altogether, and a clip that turns out to be 1630x1080 fails the
-    renderer's Full HD gate after the whole job has been assembled. So where
-    the catalogue is silent, the decoder answers.
-    """
-    try:
-        output = subprocess.run(
-            ["ffprobe", "-v", "error",
-             # The same HTTP identity the ingest uses. Without them the
-             # catalogue answers 403 and every clip reads as unmeasurable.
-             "-user_agent", "KnowledgeNuggetsSourceIngest/4.0",
-             "-referer", "https://images.nasa.gov/",
-             "-rw_timeout", "20000000",
-             "-select_streams", "v:0",
-             "-show_entries", "stream=width,height:format=duration",
-             "-of", "json", url],
-            capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS, check=True,
-        ).stdout
-        payload = json.loads(output)
-        stream = (payload.get("streams") or [{}])[0]
-        return (float(payload.get("format", {}).get("duration") or 0),
-                int(stream.get("width") or 0), int(stream.get("height") or 0))
-    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError, IndexError):
-        return 0.0, 0, 0
-
-
-def probe_duration(url: str) -> float:
-    """The clip's length alone, for callers that do not need its frame size."""
-    return probe_stream(url)[0]
-
-
-def is_full_hd(width: int, height: int) -> bool:
-    """The renderer's own gate, applied here so a job is never built to fail it."""
-    return (width >= 1920 and height >= 1080) or (height >= 1920 and width >= 1080)
-
-
 def plan_windows(duration: float, count: int, window: float = DEFAULT_WINDOW_SECONDS) -> list[tuple[float, float]]:
     """Spread `count` non-overlapping windows over a clip's usable span.
 
@@ -548,6 +412,13 @@ MAX_SHEET_SECONDS = 90.0
 # How many works are sent for description at once. Beyond this the vision pass
 # starts blurring one sheet into the next.
 MAX_DESCRIBED_WORKS = 8
+# How often a plan may send the search back out for footage its beats need.
+# Each round costs a catalogue search and a vision pass, and a subject the
+# library genuinely does not hold will not appear on the third attempt either.
+MAX_WIDENING_ROUNDS = 2
+# Works added per widening round. Fewer than the first pass, because these are
+# aimed at specific beats rather than at the whole script.
+WORKS_PER_WIDENING = 5
 
 
 def sheet_frames(duration: float) -> list[dict[str, Any]]:
@@ -611,32 +482,48 @@ def describe_request(sources: list[dict[str, Any]], base_url: str,
     return described
 
 
-def merge_observations(works: list[dict[str, Any]],
-                       observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Attach what was seen to the works the server already holds.
+def observation_map(observations: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """What the vision pass said, keyed by work and frame.
 
-    The vision pass returns descriptions and a work id, nothing else. Every URL,
-    dimension and measured length stays on this side, so a model can no longer
-    mistype one of them into a job.
+    Kept as a plain mapping so it can be stored between rounds: a second look
+    describes only the newly found works, and the first round's words must not
+    be thrown away to make room for them.
     """
-    seen_by_id: dict[str, dict[int, str]] = {}
+    described: dict[str, dict[str, str]] = {}
     for entry in observations:
         asset = str(entry.get("candidate_id") or "").strip()
         if not asset:
             continue
-        frames = seen_by_id.setdefault(asset, {})
+        frames = described.setdefault(asset, {})
         for frame in entry.get("frames") or []:
             try:
-                frames[int(frame["index"])] = str(frame.get("describes") or "")
+                frames[str(int(frame["index"]))] = str(frame.get("describes") or "")
             except (KeyError, TypeError, ValueError):
                 continue
+    return described
+
+
+def apply_observations(works: list[dict[str, Any]],
+                       described: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    """Attach what was seen to the works the server already holds.
+
+    Every URL, dimension and measured length stays on this side, so a model can
+    no longer mistype one of them into a job, and a description naming a work
+    that was never discovered is ignored.
+    """
     merged = []
     for work in works:
-        described = seen_by_id.get(work["candidate_id"], {})
+        seen = described.get(work["candidate_id"], {})
         merged.append({**work,
-                       "frames": [{**frame, "describes": described.get(frame["index"], "")}
+                       "frames": [{**frame, "describes": seen.get(str(frame["index"]), "")}
                                   for frame in work.get("frames") or []]})
     return merged
+
+
+def merge_observations(works: list[dict[str, Any]],
+                       observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One round's observations applied to one round's works."""
+    return apply_observations(works, observation_map(observations))
 
 
 def plan_from_observations(
@@ -732,3 +619,35 @@ def loads_tolerant(value: object) -> list[dict[str, Any]]:
         else:
             parsed = [parsed]
     return [item for item in parsed if isinstance(item, dict)]
+
+
+def widen_for_beats(
+    known: list[dict[str, Any]],
+    queries: list[str],
+    base_url: str,
+    per_query: int = 6,
+    window_seconds: float = DEFAULT_WINDOW_SECONDS,
+    search: Callable[[str, int], list[dict[str, Any]]] | None = None,
+    measure: Callable[[str], tuple[float, int, int]] | None = None,
+    build=ensure_sheet,
+) -> list[dict[str, Any]]:
+    """Fetch footage for the beats that had nothing, without disturbing the rest.
+
+    A plan that cannot serve a beat is not a dead end, it is a search that has
+    not been run yet. The works already in the pool are kept and skipped here,
+    so a second round adds to the choice rather than replacing it, and every
+    pairing already made stays available.
+    """
+    if not queries:
+        return []
+    segments = [{"query": query, "beats": 1} for query in queries]
+    try:
+        found = collect_sources(segments, per_query, window_seconds,
+                                search or search_nasa_video_candidates,
+                                measure or probe_stream,
+                                max_per_segment=2)
+    except SourcePoolError:
+        return []
+    seen = {work["candidate_id"] for work in known}
+    fresh = [work for work in found if work["candidate_id"] not in seen][:WORKS_PER_WIDENING]
+    return describe_request(fresh, base_url, build=build)

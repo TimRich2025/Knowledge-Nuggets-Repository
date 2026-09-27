@@ -11,10 +11,11 @@ from .production_contract import validate_submission_contract
 from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
-from .source_pool import (SourcePoolError, UnmatchedBeats, build_source_pool, collect_sources,
-                          describe_request, merge_observations,
-                          loads_tolerant, plan_from_observations, probe_stream,
-                          vision_payload)
+from .source_pool import (MAX_WIDENING_ROUNDS, SourcePoolError, UnmatchedBeats,
+                          apply_observations, build_source_pool, collect_sources,
+                          describe_request, loads_tolerant, observation_map,
+                          plan_from_observations, probe_stream, vision_payload,
+                          widen_for_beats)
 from .scene_match import MATCH_FLOOR
 from .storyboard import StoryboardError, sheet_path
 from .social_metadata import MetadataError, build_social_metadata
@@ -337,7 +338,8 @@ def source_pool_candidates(payload: SourcePoolRequest, request: Request,
     described = describe_request(sources, public_base_url(request))
     pool_id = uuid.uuid4().hex
     try:
-        db().setex(f"kn:pool:{pool_id}", POOL_TTL_SECONDS, json.dumps(described))
+        db().setex(f"kn:pool:{pool_id}", POOL_TTL_SECONDS,
+                   json.dumps({"works": described, "observations": {}, "rounds": 0}))
     except HTTPException:
         pool_id = ""
     return {"pool_id": pool_id, "sources": described, **vision_payload(described),
@@ -347,35 +349,67 @@ def source_pool_candidates(payload: SourcePoolRequest, request: Request,
 @app.post("/source-pool/plan")
 def source_pool_plan(payload: SourcePlanRequest, request: Request,
                      authorization: str | None = Header(default=None)):
-    """Pair every beat with footage that was seen to contain what it needs."""
+    """Pair every beat with footage that was seen to contain what it needs.
+
+    When some beat has nothing, the call does not simply refuse. It searches
+    again for what those beats ask for, adds the new works to the same pool and
+    hands back their contact sheets, so the caller's next move is one more look
+    rather than a fresh start. Only when that has been tried does it give up,
+    and then it says which beats it could not serve.
+    """
     if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
         auth(authorization)
-    beats = [beat if isinstance(beat, dict) else beat.model_dump()
-             for beat in loads_tolerant(payload.beats)] if isinstance(payload.beats, str) \
+    beats = loads_tolerant(payload.beats) if isinstance(payload.beats, str) \
         else [beat.model_dump() for beat in payload.beats]
     if not beats:
         raise HTTPException(422, "no readable beats were supplied")
-    observed = loads_tolerant(payload.observations) if isinstance(payload.observations, str) \
+    incoming = loads_tolerant(payload.observations) if isinstance(payload.observations, str) \
         else [entry.model_dump() for entry in payload.observations]
-    works = [work.model_dump() for work in payload.works]
-    if payload.pool_id:
-        stored = db().get(f"kn:pool:{safe_id(payload.pool_id)}")
+
+    key = f"kn:pool:{safe_id(payload.pool_id)}" if payload.pool_id else ""
+    state = {"works": [work.model_dump() for work in payload.works],
+             "observations": {}, "rounds": 0}
+    if key:
+        stored = db().get(key)
         if not stored:
             raise HTTPException(409, "that source pool has expired; discover the works again")
-        works = merge_observations(json.loads(stored), observed)
+        loaded = json.loads(stored)
+        # An older pool held the works alone. Read both shapes so a run started
+        # before this change can still finish.
+        state = loaded if isinstance(loaded, dict) else {"works": loaded, "observations": {},
+                                                         "rounds": 0}
+    described = {**state.get("observations", {}), **observation_map(incoming)}
+    works = apply_observations(state.get("works", []), described)
     if not works:
         raise HTTPException(422, "supply either a pool_id with observations, or works in full")
+
     try:
-        return plan_from_observations(
-            beats, works,
-            window_seconds=payload.window_seconds,
-            match_floor=payload.match_floor)
+        return plan_from_observations(beats, works, window_seconds=payload.window_seconds,
+                                      match_floor=payload.match_floor)
     except UnmatchedBeats as exc:
-        # 409, not 422: the request was well formed and the footage simply does
-        # not show what these beats need. The caller can act on that by
-        # searching again, which the body tells it how to do.
-        raise HTTPException(409, {"detail": str(exc), "unmatched_beats": exc.unmatched,
-                                  "retry_queries": exc.retry_queries})
+        rounds = int(state.get("rounds", 0))
+        fresh = []
+        if key and rounds < MAX_WIDENING_ROUNDS:
+            fresh = widen_for_beats(state.get("works", []), exc.retry_queries,
+                                    public_base_url(request),
+                                    window_seconds=payload.window_seconds)
+        if fresh:
+            state = {"works": state.get("works", []) + fresh,
+                     "observations": described, "rounds": rounds + 1}
+            db().setex(key, POOL_TTL_SECONDS, json.dumps(state))
+            # 409, not 422: the request was well formed and the footage simply
+            # did not show what these beats need. The body is the next step.
+            raise HTTPException(409, {"detail": str(exc), "status": "LOOK_AGAIN",
+                                      "unmatched_beats": exc.unmatched,
+                                      "retry_queries": exc.retry_queries,
+                                      "round": rounds + 1,
+                                      "new_sources": fresh, **vision_payload(fresh)})
+        if key:
+            db().setex(key, POOL_TTL_SECONDS, json.dumps({**state, "observations": described}))
+        raise HTTPException(409, {"detail": str(exc), "status": "NO_MATCHING_FOOTAGE",
+                                  "unmatched_beats": exc.unmatched,
+                                  "retry_queries": exc.retry_queries,
+                                  "rounds_spent": rounds})
     except (SourcePoolError, ValueError) as exc:
         raise HTTPException(422, str(exc))
 

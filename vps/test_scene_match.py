@@ -357,3 +357,89 @@ class RetrySuggestionTests(unittest.TestCase):
         error = UnmatchedBeats("nothing matched", unmatched=[4, 5], retry_queries=["rocket clamp"])
         self.assertEqual(error.unmatched, [4, 5])
         self.assertEqual(error.retry_queries, ["rocket clamp"])
+
+
+class WideningRoundTests(unittest.TestCase):
+    """A plan that cannot serve a beat is a search that has not been run yet."""
+
+    def _catalogue(self, query, limit):
+        subject = query.split()[0]
+        return [{"candidate_id": f"{subject.upper()}{n}", "title": query,
+                 "source_family": "NASA Images",
+                 "direct_download_url": f"https://images-assets.nasa.gov/video/{subject}{n}/x~orig.mp4",
+                 "catalog_page_url": "", "asset_listing_url": "",
+                 "review_frame_urls": [f"https://x/{n}-{i}.jpg" for i in range(1, 6)],
+                 "source_width": 1920, "source_height": 1080, "source_duration": "0:00:40",
+                 "technical_status": "ELIGIBLE_FHD_OR_HIGHER"} for n in range(3)][:limit]
+
+    def _widen(self, known, queries):
+        from .source_pool import widen_for_beats
+        return widen_for_beats(known, queries, "https://w.app",
+                               search=self._catalogue,
+                               measure=lambda url: (40.0, 1920, 1080),
+                               build=lambda urls: ("e" * 32, 5))
+
+    def test_a_second_round_adds_works_rather_than_replacing_them(self) -> None:
+        found = self._widen([{"candidate_id": "CLAMP0"}], ["clamp arms", "launch platform"])
+        self.assertTrue(found)
+        self.assertNotIn("CLAMP0", [work["candidate_id"] for work in found])
+
+    def test_the_new_works_arrive_with_sheets_to_look_at(self) -> None:
+        found = self._widen([], ["clamp arms"])
+        self.assertTrue(all(work["contact_sheet_url"].startswith("https://w.app/storyboards/")
+                            for work in found))
+        self.assertTrue(all(work["frames"] for work in found))
+
+    def test_no_queries_means_no_search(self) -> None:
+        self.assertEqual(self._widen([], []), [])
+
+    def test_a_round_is_bounded(self) -> None:
+        """A subject the library does not hold will not appear on the third try."""
+        from .source_pool import MAX_WIDENING_ROUNDS, WORKS_PER_WIDENING
+        self.assertLessEqual(MAX_WIDENING_ROUNDS, 2)
+        found = self._widen([], ["clamp arms", "launch platform", "mission control"])
+        self.assertLessEqual(len(found), WORKS_PER_WIDENING)
+
+
+class ObservationStateTests(unittest.TestCase):
+    """A second look describes only the new works; the first round must survive."""
+
+    WORKS = [{"candidate_id": "A", "frames": [{"index": 1, "at_seconds": 3.0},
+                                              {"index": 2, "at_seconds": 9.0}]},
+             {"candidate_id": "B", "frames": [{"index": 1, "at_seconds": 3.0}]}]
+
+    def test_two_rounds_of_observations_accumulate(self) -> None:
+        from .source_pool import apply_observations, observation_map
+        first = observation_map([{"candidate_id": "A",
+                                  "frames": [{"index": 1, "describes": "a rocket at the pad"}]}])
+        second = observation_map([{"candidate_id": "B",
+                                   "frames": [{"index": 1, "describes": "a control room"}]}])
+        merged = apply_observations(self.WORKS, {**first, **second})
+        described = {work["candidate_id"]: work["frames"][0]["describes"] for work in merged}
+        self.assertEqual(described["A"], "a rocket at the pad")
+        self.assertEqual(described["B"], "a control room")
+
+    def test_a_later_round_can_correct_an_earlier_frame(self) -> None:
+        from .source_pool import apply_observations, observation_map
+        first = observation_map([{"candidate_id": "A",
+                                  "frames": [{"index": 1, "describes": "blurred frame"}]}])
+        second = observation_map([{"candidate_id": "A",
+                                   "frames": [{"index": 1, "describes": "a rocket at the pad"}]}])
+        merged = apply_observations(self.WORKS, {**first, **second})
+        self.assertEqual(merged[0]["frames"][0]["describes"], "a rocket at the pad")
+
+    def test_a_frame_nobody_described_stays_empty(self) -> None:
+        from .source_pool import apply_observations, observation_map
+        merged = apply_observations(self.WORKS, observation_map(
+            [{"candidate_id": "A", "frames": [{"index": 1, "describes": "sky"}]}]))
+        self.assertEqual(merged[0]["frames"][1]["describes"], "")
+
+    def test_the_map_survives_a_round_trip_through_json(self) -> None:
+        """It is stored in Redis between rounds, so its keys must be strings."""
+        import json
+        from .source_pool import apply_observations, observation_map
+        described = observation_map([{"candidate_id": "A",
+                                      "frames": [{"index": 2, "describes": "exhaust plume"}]}])
+        restored = json.loads(json.dumps(described))
+        merged = apply_observations(self.WORKS, restored)
+        self.assertEqual(merged[0]["frames"][1]["describes"], "exhaust plume")
