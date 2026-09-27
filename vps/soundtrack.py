@@ -17,7 +17,12 @@ from pathlib import Path
 
 from .config import ROOT
 
+# Two places, checked in this order. The volume is for anything uploaded to the
+# running worker; the repository folder is how a track actually gets here, since
+# adding a file to git and letting the image carry it needs no access to the
+# volume at all.
 MUSIC_DIR = Path(os.environ.get("KN_MUSIC_DIR", str(ROOT / "music")))
+BUNDLED_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "music"
 SUPPORTED_SUFFIXES = (".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac")
 # Far enough under the voice that it reads as atmosphere. The ducking takes it
 # lower again while a word is being spoken.
@@ -29,13 +34,18 @@ FADE_OUT_SECONDS = 1.6
 MAX_FADE_IN_SHARE = 0.08
 
 
-def available_tracks(directory: Path | None = None) -> list[Path]:
-    """Every usable track in the music directory, in a stable order."""
-    root = Path(directory or MUSIC_DIR)
+def _tracks_in(root: Path) -> list[Path]:
     if not root.is_dir():
         return []
     return sorted(path for path in root.iterdir()
                   if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES)
+
+
+def available_tracks(directory: Path | None = None) -> list[Path]:
+    """Every usable track, from the volume if it has any, otherwise from the repo."""
+    if directory is not None:
+        return _tracks_in(Path(directory))
+    return _tracks_in(MUSIC_DIR) or _tracks_in(BUNDLED_MUSIC_DIR)
 
 
 def pick_track(content_id: str, tracks: list[Path]) -> Path | None:
