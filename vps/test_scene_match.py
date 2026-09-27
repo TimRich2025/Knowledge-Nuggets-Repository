@@ -443,3 +443,62 @@ class ObservationStateTests(unittest.TestCase):
         restored = json.loads(json.dumps(described))
         merged = apply_observations(self.WORKS, restored)
         self.assertEqual(merged[0]["frames"][1]["describes"], "exhaust plume")
+
+
+class ObservationNamingTests(unittest.TestCase):
+    """Which work a description belongs to, when the id came back mistyped.
+
+    A live run lost every description at once: the vision pass answered with
+    work ids that matched nothing in the pool, so the matcher was told that none
+    of eight clips had been looked at. Guessing by order would have paired each
+    beat with whatever footage happened to be listed there, which is the exact
+    failure this pass exists to prevent, so an unrecognisable name is dropped
+    and said out loud instead.
+    """
+
+    KNOWN = [{"candidate_id": "KSC-20190914-RV-ILW01_0001-Wet_Flow-3231741"},
+             {"candidate_id": "PSI_Test-ID_28"}]
+
+    def name(self, entry):
+        from .source_pool import name_observed_work
+        return name_observed_work(entry, self.KNOWN)
+
+    def test_the_id_copied_back_exactly(self) -> None:
+        self.assertEqual(self.name({"candidate_id": "PSI_Test-ID_28"}), "PSI_Test-ID_28")
+
+    def test_the_same_id_in_another_spelling(self) -> None:
+        """Underscores dropped, hyphens added, case changed: still that work."""
+        self.assertEqual(self.name({"candidate_id": "psi test id 28"}), "PSI_Test-ID_28")
+        self.assertEqual(self.name({"candidate_id": "KSC 20190914 RV ILW01 0001 wet flow 3231741"}),
+                         "KSC-20190914-RV-ILW01_0001-Wet_Flow-3231741")
+
+    def test_the_image_number_when_the_id_is_wrong(self) -> None:
+        self.assertEqual(self.name({"candidate_id": "image two", "image": 2}), "PSI_Test-ID_28")
+
+    def test_the_image_number_alone(self) -> None:
+        self.assertEqual(self.name({"image": 1}),
+                         "KSC-20190914-RV-ILW01_0001-Wet_Flow-3231741")
+
+    def test_an_unknown_name_is_dropped_rather_than_guessed(self) -> None:
+        self.assertEqual(self.name({"candidate_id": "STS-51L-something-else"}), "")
+        self.assertEqual(self.name({"candidate_id": "x", "image": 9}), "")
+
+    def test_the_order_entries_arrive_in_is_never_used(self) -> None:
+        """Two unrecognisable entries stay unrecognised, however they are ordered."""
+        from .source_pool import observation_map
+        described = observation_map(
+            [{"candidate_id": "wrong one", "frames": [{"index": 1, "describes": "a pad"}]},
+             {"candidate_id": "wrong two", "frames": [{"index": 1, "describes": "a tower"}]}],
+            self.KNOWN)
+        self.assertEqual(described, {})
+
+    def test_the_names_that_fit_nothing_are_reported(self) -> None:
+        from .source_pool import unplaced_observations
+        self.assertEqual(unplaced_observations(
+            [{"candidate_id": "PSI_Test-ID_28"}, {"candidate_id": "invented"}], self.KNOWN),
+            ["invented"])
+
+    def test_without_a_pool_the_id_is_taken_as_given(self) -> None:
+        """The plan can also be asked for with the works spelled out in full."""
+        from .source_pool import name_observed_work
+        self.assertEqual(name_observed_work({"candidate_id": "anything"}, []), "anything")

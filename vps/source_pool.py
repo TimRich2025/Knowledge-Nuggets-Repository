@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import subprocess
 from urllib.parse import urlencode
 from collections import Counter
@@ -482,7 +483,52 @@ def describe_request(sources: list[dict[str, Any]], base_url: str,
     return described
 
 
-def observation_map(observations: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+def loose_id(asset: object) -> str:
+    """An id with its punctuation and case removed, for comparing two spellings."""
+    return re.sub(r"[^a-z0-9]+", "", str(asset or "").lower())
+
+
+def name_observed_work(entry: dict[str, Any], known: list[dict[str, Any]]) -> str:
+    """Which work an observation is about, or "" when that cannot be settled.
+
+    The vision pass is asked to copy a work's id back, and the ids in this
+    catalogue run to seventy characters of mixed case, digits, underscores and
+    hyphens, so a copy is not something to rely on. The id is resolved rather
+    than trusted: exactly, then ignoring case and punctuation, and failing that
+    by the image number the request listed the work under, which is one or two
+    digits and hard to get wrong.
+
+    What it never does is fall back on the order the entries arrived in. An
+    unrecognised name is dropped, because a description attached to the wrong
+    clip is precisely the mistake this whole pass exists to prevent, and it
+    would be invisible: the plan would look matched and the footage would be
+    someone else's.
+    """
+    named = str(entry.get("candidate_id") or "").strip()
+    if not known:
+        return named
+    exact = {work["candidate_id"] for work in known}
+    if named in exact:
+        return named
+    loose = {loose_id(work["candidate_id"]): work["candidate_id"] for work in known}
+    if named and loose_id(named) in loose:
+        return loose[loose_id(named)]
+    try:
+        image = int(entry.get("image"))
+    except (TypeError, ValueError):
+        return ""
+    return known[image - 1]["candidate_id"] if 1 <= image <= len(known) else ""
+
+
+def unplaced_observations(observations: list[dict[str, Any]],
+                          known: list[dict[str, Any]]) -> list[str]:
+    """The names the vision pass used that answer to no work in the pool."""
+    return [str(entry.get("candidate_id") or entry.get("image") or "?")
+            for entry in observations if not name_observed_work(entry, known)]
+
+
+def observation_map(observations: list[dict[str, Any]],
+                    known: list[dict[str, Any]] | None = None) -> dict[str, dict[str, str]]:
     """What the vision pass said, keyed by work and frame.
 
     Kept as a plain mapping so it can be stored between rounds: a second look
@@ -491,7 +537,7 @@ def observation_map(observations: list[dict[str, Any]]) -> dict[str, dict[str, s
     """
     described: dict[str, dict[str, str]] = {}
     for entry in observations:
-        asset = str(entry.get("candidate_id") or "").strip()
+        asset = name_observed_work(entry, known or [])
         if not asset:
             continue
         frames = described.setdefault(asset, {})
@@ -523,7 +569,7 @@ def apply_observations(works: list[dict[str, Any]],
 def merge_observations(works: list[dict[str, Any]],
                        observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One round's observations applied to one round's works."""
-    return apply_observations(works, observation_map(observations))
+    return apply_observations(works, observation_map(observations, works))
 
 
 def plan_from_observations(
@@ -562,7 +608,8 @@ def plan_from_observations(
     if not candidates:
         raise SourcePoolError(
             "none of the supplied works carried a frame description; the vision "
-            "pass must say what each numbered frame shows")
+            "pass must say what each numbered frame shows. The pool holds: "
+            + ", ".join(str(work.get("candidate_id")) for work in works[:10]))
 
     result = plan_by_content(beats, candidates, match_floor=match_floor)
     plan = result["plan"]

@@ -14,8 +14,8 @@ from .source_catalog import SourceCatalogError, search_nasa_video_candidates
 from .source_pool import (MAX_WIDENING_ROUNDS, SourcePoolError, UnmatchedBeats,
                           apply_observations, build_source_pool, collect_sources,
                           describe_request, loads_tolerant, observation_map,
-                          plan_from_observations, probe_stream, vision_payload,
-                          widen_for_beats)
+                          plan_from_observations, probe_stream, unplaced_observations,
+                          vision_payload, widen_for_beats)
 from .scene_match import MATCH_FLOOR
 from .storyboard import StoryboardError, sheet_path
 from .social_metadata import MetadataError, build_social_metadata
@@ -117,7 +117,12 @@ class FrameObservation(BaseModel):
     describes: str = Field(default="", max_length=2000)
 
 class WorkObservation(BaseModel):
-    candidate_id: str = Field(min_length=1, max_length=200)
+    # Either the work's own id, copied back, or the image number the request
+    # listed it under. The number is one or two digits and a model gets it right;
+    # a seventy-character catalogue id it sometimes does not, and a description
+    # that lands on no work at all is the same as not having looked.
+    candidate_id: str = Field(default="", max_length=200)
+    image: int | None = Field(default=None, ge=1, le=64)
     frames: list[FrameObservation] = Field(default_factory=list, max_length=64)
 
 class SourcePlanRequest(BaseModel):
@@ -394,10 +399,18 @@ def source_pool_plan(payload: SourcePlanRequest, request: Request,
     if settled:
         return {**settled, "status": "MATCHED"}
 
-    described = {**state.get("observations", {}), **observation_map(incoming)}
-    works = apply_observations(state.get("works", []), described)
+    held = state.get("works", [])
+    described = {**state.get("observations", {}), **observation_map(incoming, held)}
+    works = apply_observations(held, described)
     if not works:
         raise HTTPException(422, "supply either a pool_id with observations, or works in full")
+    stray = unplaced_observations(incoming, held)
+    if stray and not described:
+        # Every description named something this pool does not hold, so nothing
+        # was looked at as far as the matcher is concerned. Say which names, or
+        # the next person sees only "no frame descriptions" and cannot tell why.
+        raise HTTPException(422, "the vision pass described works this pool does not "
+                                 f"hold: {', '.join(stray[:10])}")
 
     def remember(**changed) -> None:
         if key:
