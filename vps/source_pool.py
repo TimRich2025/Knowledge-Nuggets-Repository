@@ -470,7 +470,13 @@ def build_source_pool(
     beats = sum(int(segment.get("beats") or 0) for segment in segments)
     if beats < 1:
         raise SourcePoolError("the segments request no beats")
-    search = search or search_nasa_video_candidates
+    # When the real catalogue is used, record what its scan did with every item.
+    # A pool that comes back short is otherwise indistinguishable from a
+    # catalogue that holds nothing, and the two need opposite responses.
+    scan: dict[str, int] = {}
+    if search is None:
+        def search(query: str, limit: int) -> list[dict[str, Any]]:
+            return search_nasa_video_candidates(query, limit, scan=scan)
     measure = measure or probe_stream
     sources = collect_sources(segments, per_query, window_seconds, search, measure,
                               max_per_segment=max_per_segment)
@@ -483,10 +489,12 @@ def build_source_pool(
                          search, measure, max_per_segment)
     if len(sources) < required:
         why = getattr(collect_sources, "last_rejections", "")
+        catalogue = ", ".join(f"{count} {reason}" for reason, count in sorted(scan.items()))
         raise SourcePoolError(
             f"only {len(sources)} usable works were found, below the {required} the "
             f"production contract requires"
             + (f"; {why}" if why else "")
+            + (f"; the catalogue scan saw {catalogue}" if catalogue else "")
             + ". A query naming one mission or vehicle matches only a handful of "
               "works; search for the subject instead"
         )

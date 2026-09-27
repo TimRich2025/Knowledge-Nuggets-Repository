@@ -179,13 +179,22 @@ def _search_items(query: str, requested: int, earliest_year: int | None) -> list
 
 def search_nasa_video_candidates(query: str, limit: int = 6,
                                  earliest_year: int = DEFAULT_EARLIEST_YEAR,
-                                 measure=probe_stream) -> list[dict[str, Any]]:
+                                 measure=probe_stream,
+                                 scan: dict[str, int] | None = None) -> list[dict[str, Any]]:
     """Return unverified direct NASA video candidates for later frame review.
 
     No returned object has `semantic_match=EXACT`, `temporal_match=VERIFIED`,
     a licence PASS, or a timecode claim.  Those fields are deliberately absent
     so this function cannot accidentally become a render approval bypass.
+
+    `scan`, when given, is filled with what became of every catalogue item.
+    A caller that only sees the survivors cannot tell a thin catalogue from a
+    strict filter, and has to guess which one it is looking at.
     """
+    tally: dict[str, int] = scan if scan is not None else {}
+
+    def note(reason: str, count: int = 1) -> None:
+        tally[reason] = tally.get(reason, 0) + count
     query = _text(query, 240)
     if len(query) < 2:
         raise SourceCatalogError("source query must contain at least two characters")
@@ -199,6 +208,9 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
         seen_hrefs = {item.get("href") for item in items}
         items = items + [item for item in _search_items(query, requested, None)
                          if item.get("href") not in seen_hrefs]
+        note("pages read", 1)
+    note("pages read", 1)
+    note("catalogue items", len(items))
 
     candidates: list[dict[str, Any]] = []
     below_hd: list[dict[str, Any]] = []
@@ -210,15 +222,20 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
         asset_listing = item.get("href")
         nasa_id = _text(data.get("nasa_id"), 120)
         if not nasa_id or not isinstance(asset_listing, str) or not _approved_nasa_url(asset_listing):
+            note("item not an approved asset")
             continue
         try:
             direct_url, review_url, review_frames = _asset_video_urls(asset_listing)
         except (requests.RequestException, ValueError):
+            note("asset listing unreadable")
             continue
         if not direct_url:
+            note("asset holds no mp4")
             continue
         technical = _asset_metadata(asset_listing)
         fhd = _fhd_or_higher(technical["source_width"], technical["source_height"])
+        if fhd is None and measured >= MAX_MEASUREMENTS_PER_SEARCH:
+            note("size never established")
         if fhd is None and measured < MAX_MEASUREMENTS_PER_SEARCH:
             # Most NASA video assets publish no metadata.json, so without this
             # the sub-HD ones look eligible and occupy every slot. One header
@@ -252,7 +269,12 @@ def search_nasa_video_candidates(query: str, limit: int = 6,
         # kept aside rather than discarded, because a caller with nothing else
         # would rather see it than see an empty list.
         if record["technical_status"] == "REJECT_BELOW_FHD":
+            note("below Full HD")
             below_hd.append(record)
         else:
+            note("kept")
             candidates.append(record)
-    return candidates or below_hd[:requested]
+    if not candidates:
+        note("returned sub-HD for want of anything better", len(below_hd[:requested]))
+        return below_hd[:requested]
+    return candidates
