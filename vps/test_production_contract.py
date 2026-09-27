@@ -12,6 +12,7 @@ SCENE = {
     "caption_beats": ["WATER PULLS", "ITSELF INTO", "A SPHERE"],
     "shot_start_seconds": 12.0,
     "shot_end_seconds": 14.4,
+    "selected_asset_page_url": "https://images.nasa.gov/details/EXAMPLE-DROPLET-0001",
 }
 
 

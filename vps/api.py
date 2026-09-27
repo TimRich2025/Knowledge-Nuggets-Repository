@@ -11,6 +11,7 @@ from .production_contract import validate_submission_contract
 from .source_cache import IngestError
 from .visual_probe import create_source_probe, make_probe_token, probe_frame_path, source_probe_key, verify_probe_token
 from .source_catalog import SourceCatalogError, search_nasa_video_candidates
+from .source_pool import SourcePoolError, build_source_pool
 from .social_metadata import MetadataError, build_social_metadata
 
 app=FastAPI(title="Knowledge Nuggets Render Worker",version="1.1")
@@ -69,6 +70,16 @@ class SourceProbe(BaseModel):
 class SourceCandidateSearch(BaseModel):
     query: str = Field(min_length=2, max_length=240)
     limit: int = Field(default=6, ge=1, le=12)
+
+class SourceSegment(BaseModel):
+    query: str = Field(min_length=2, max_length=240)
+    beats: int = Field(ge=1, le=40)
+
+class SourcePoolRequest(BaseModel):
+    segments: list[SourceSegment] = Field(min_length=1, max_length=8)
+    per_query: int = Field(default=5, ge=1, le=12)
+    window_seconds: float = Field(default=2.3, ge=1.5, le=2.35)
+    callback_url: str | None = None
 
 class SocialMetadata(BaseModel):
     topic: str = Field(min_length=3, max_length=240)
@@ -210,6 +221,29 @@ def source_candidates(payload: SourceCandidateSearch, authorization: str | None 
         "candidates": candidates,
         "approval_policy": "Every candidate remains UNVERIFIED. A visible-frame review and an exact continuous shot interval are mandatory before rendering.",
     }
+
+@app.post("/source-pool")
+def source_pool(payload: SourcePoolRequest, request: Request, authorization: str | None = Header(default=None)):
+    """Return a measured multi-source beat plan, so no model has to invent one.
+
+    Authorised the same way as /jobs: Make identifies itself by the callback URL
+    it is already configured with, anything else needs the bearer token.  The
+    rate limit applies either way, because every call costs the NASA catalogue
+    several queries and one header read per candidate clip.
+    """
+    if not (ALLOWED_CALLBACK_URL and payload.callback_url == ALLOWED_CALLBACK_URL):
+        auth(authorization)
+    allow_public_probe(request)
+    try:
+        return build_source_pool(
+            [segment.model_dump() for segment in payload.segments],
+            per_query=payload.per_query,
+            window_seconds=payload.window_seconds,
+        )
+    except SourcePoolError as exc:
+        raise HTTPException(422, str(exc))
+    except SourceCatalogError as exc:
+        raise HTTPException(502, str(exc))
 
 @app.post("/social-metadata")
 def social_metadata(payload: SocialMetadata, authorization: str | None = Header(default=None)):
