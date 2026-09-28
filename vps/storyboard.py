@@ -27,8 +27,8 @@ SHEET_ROOT = OUTPUTS / "storyboards"
 # carrying eight sheets at 480px was refused three runs in a row with "this
 # model is currently experiencing high demand", while a single sheet came back
 # in seconds. The picture only has to be readable enough to name what is in it.
-TILE_WIDTH = 384
-MAX_TILES = 6
+TILE_WIDTH = 320
+MAX_TILES = 4
 FETCH_TIMEOUT = (5, 20)
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "KnowledgeNuggetsStoryboard/1.0",

@@ -410,7 +410,7 @@ def build_source_pool(
 # Frames per contact sheet. Six well-spaced stills describe a thirty-second
 # clip well enough to place a three-second window, and several six-tile sheets
 # are read far more accurately in one pass than several twelve-tile ones.
-SHEET_FRAMES = 6
+SHEET_FRAMES = 4
 MAX_SHEET_SECONDS = 90.0
 # How many works are sent for description at once. Beyond this the vision pass
 # starts blurring one sheet into the next, and, measured, it starts refusing
