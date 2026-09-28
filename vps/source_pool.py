@@ -413,8 +413,11 @@ def build_source_pool(
 SHEET_FRAMES = 6
 MAX_SHEET_SECONDS = 90.0
 # How many works are sent for description at once. Beyond this the vision pass
-# starts blurring one sheet into the next.
-MAX_DESCRIBED_WORKS = 8
+# starts blurring one sheet into the next, and, measured, it starts refusing
+# outright: eight sheets in one request were turned down three runs running
+# with "this model is currently experiencing high demand" while one sheet came
+# back in seconds. Six still clears the five-source contract with one to spare.
+MAX_DESCRIBED_WORKS = 6
 # How many of a work's stills must show something real before it is worth
 # offering at all. Below this it is a compilation or a slideshow, not footage.
 MIN_FOOTAGE_FRAMES = 2

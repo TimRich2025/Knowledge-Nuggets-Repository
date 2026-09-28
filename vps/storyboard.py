@@ -23,7 +23,11 @@ from PIL import Image
 from .config import OUTPUTS
 
 SHEET_ROOT = OUTPUTS / "storyboards"
-TILE_WIDTH = 480
+# Measured against the vision pass, not against how the sheet looks. A request
+# carrying eight sheets at 480px was refused three runs in a row with "this
+# model is currently experiencing high demand", while a single sheet came back
+# in seconds. The picture only has to be readable enough to name what is in it.
+TILE_WIDTH = 384
 MAX_TILES = 6
 FETCH_TIMEOUT = (5, 20)
 _SESSION = requests.Session()
