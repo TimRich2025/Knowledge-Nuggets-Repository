@@ -635,3 +635,69 @@ class RetryQueryTests(unittest.TestCase):
         from .scene_match import suggested_queries
         self.assertEqual(suggested_queries(self.BEATS, [3, 4]),
                          suggested_queries(self.BEATS, [3, 4]))
+
+
+class SameThirdFallbackTests(unittest.TestCase):
+    """One stubborn beat must not cost the whole Short.
+
+    A measured run matched seventeen beats of eighteen and refused, because
+    beat 17's brief asked for "open sky" and nobody describing a still writes
+    "open". The script is written in three thirds and each third is one visual
+    subject by instruction, so that beat's neighbours were written to need the
+    same picture: giving it their footage uses a guarantee the pipeline already
+    makes, rather than guessing.
+    """
+
+    # Six beats, so the thirds are two beats each and the last two are the
+    # ascent, exactly as an eighteen-beat script's last third behaves.
+    BEATS = [{"must_show": ["rocket", "launch pad"], "visual_target": "A rocket on its launch pad",
+              "spoken_phrase": "A rocket waits on the pad"},
+             {"must_show": ["launch pad", "smoke"], "visual_target": "Smoke across the launch pad",
+              "spoken_phrase": "Smoke spreads across the pad"},
+             {"must_show": ["flame", "exhaust"], "visual_target": "Flame and exhaust below",
+              "spoken_phrase": "Flame grows beneath the rocket"},
+             {"must_show": ["exhaust", "ground"], "visual_target": "Exhaust across the ground",
+              "spoken_phrase": "Exhaust spreads across the ground"},
+             {"must_show": ["rocket", "sky"], "visual_target": "The rocket climbs through the sky",
+              "spoken_phrase": "The rocket climbs away"},
+             {"must_show": ["open sky", "rocket"], "visual_target": "Open sky around the rocket",
+              "spoken_phrase": "Open sky surrounds the rising rocket"}]
+
+    def windows(self) -> list[dict]:
+        return [window("PAD", 4.0, "A rocket standing on a launch pad beside a tower"),
+                window("SMOKE", 8.0, "Smoke and steam spreading across the launch pad"),
+                window("FLAME", 12.0, "Bright flame and exhaust burning below the vehicle"),
+                window("GROUND", 16.0, "Exhaust rolling across the ground around the pad"),
+                window("ASCENT", 20.0, "A rocket climbing high through a clear sky trailing exhaust"),
+                window("ASCENT", 28.0, "A rocket high in the sky above thin cloud")]
+
+    def test_the_stubborn_beat_is_served_by_its_neighbour_s_work(self) -> None:
+        result = plan_by_content(self.BEATS, self.windows())
+        self.assertEqual(result["unmatched_beats"], [])
+
+    def test_a_borrowed_beat_says_so(self) -> None:
+        result = plan_by_content(self.BEATS, self.windows())
+        borrowed = [entry for entry in result["plan"] if entry.get("served_by")]
+        self.assertEqual([entry["beat"] for entry in borrowed], [6])
+        self.assertEqual(borrowed[0]["served_by"], "same third")
+        self.assertEqual(borrowed[0]["candidate_id"], "ASCENT")
+
+    def test_a_borrowed_beat_still_carries_terms_to_describe(self) -> None:
+        result = plan_by_content(self.BEATS, self.windows())
+        borrowed = next(entry for entry in result["plan"] if entry.get("served_by"))
+        self.assertTrue(borrowed["matched_terms"])
+
+    def test_it_never_reaches_across_subjects(self) -> None:
+        """A beat sharing no requirement with a served beat stays unmatched."""
+        beats = list(self.BEATS)
+        beats[5] = {"must_show": ["seafloor", "submarine"],
+                    "visual_target": "A submarine resting on the seafloor",
+                    "spoken_phrase": "A submarine rests on the seafloor"}
+        result = plan_by_content(beats, self.windows())
+        self.assertEqual(result["unmatched_beats"], [6])
+
+    def test_a_scored_beat_is_never_marked_as_borrowed(self) -> None:
+        result = plan_by_content(self.BEATS, self.windows())
+        scored = [entry for entry in result["plan"] if entry["beat"] != 6]
+        self.assertTrue(scored)
+        self.assertFalse([entry for entry in scored if entry.get("served_by")])
