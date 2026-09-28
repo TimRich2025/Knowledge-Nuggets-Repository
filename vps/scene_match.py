@@ -254,6 +254,45 @@ def _serve_from_the_same_third(beats, windows, chosen, used_windows, per_source,
     return borrowed
 
 
+def _serve_from_what_is_left(beats, windows, chosen, used_windows, per_source,
+                             share_cap) -> set[int]:
+    """Give a beat the best footage still free, once nothing else has served it.
+
+    The channels this competes with do not prove that shot eleven illustrates
+    sentence eleven. They pick footage on the topic, cut it fast and let the
+    pace and the captions carry the viewer. Holding out for proof on every
+    single beat threw away whole Shorts that were right about seventeen of
+    eighteen, which is a worse outcome by any measure the viewer can see.
+
+    So the floor still decides who gets the good windows: every beat that can
+    be proved is served first, hardest-first, and only what is left over comes
+    here. What this never does is reach for a slate: those windows carry no
+    terms at all and are filtered out before scoring, so the worst this can
+    hand a beat is real footage on the wrong subject, not a NASA title card.
+    """
+    served: set[int] = set()
+    for position in range(len(beats)):
+        if position in chosen:
+            continue
+        free = [index for index, window in enumerate(windows)
+                if index not in used_windows
+                and window["seen"]
+                and per_source[window["candidate_id"]] < share_cap
+                and not _neighbour_conflict(chosen, windows, position,
+                                            window["candidate_id"])]
+        if not free:
+            continue
+        index = min(free, key=lambda candidate: (
+            -match_score(beats[position], windows[candidate]["seen"]),
+            per_source[windows[candidate]["candidate_id"]], candidate))
+        chosen[position] = (index, round(match_score(beats[position],
+                                                     windows[index]["seen"]), 4))
+        used_windows.add(index)
+        per_source[windows[index]["candidate_id"]] += 1
+        served.add(position)
+    return served
+
+
 def plan_by_content(
     beats: list[dict[str, Any]],
     windows: list[dict[str, Any]],
@@ -306,6 +345,8 @@ def plan_by_content(
     # A beat with nothing of its own may still be served by its own third.
     borrowed = _serve_from_the_same_third(beats, windows, chosen, used_windows,
                                           per_source, share_cap)
+    leftover = _serve_from_what_is_left(beats, windows, chosen, used_windows,
+                                        per_source, share_cap)
 
     plan: list[dict[str, Any]] = []
     unmatched: list[int] = []
@@ -324,8 +365,13 @@ def plan_by_content(
                  # words, and the manifest needs something to describe. What it
                  # shows is what the window was seen to hold, so say that.
                  "matched_terms": shared or sorted(window["seen"])[:6]}
+        # Which mechanism served it, not how high it scored: a beat can borrow
+        # from its own third and still sit below the floor, and calling that
+        # the same thing as a leftover pairing would lose the distinction.
         if position in borrowed:
             entry["served_by"] = "same third"
+        elif position in leftover:
+            entry["served_by"] = "best available"
         plan.append(entry)
     return {
         "plan": plan,
