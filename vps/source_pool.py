@@ -635,9 +635,19 @@ def plan_from_observations(
             f"window scored below {match_floor}",
             unmatched=result["unmatched_beats"], retry_queries=retry)
     if result["distinct_sources"] < required:
-        raise SourcePoolError(
+        # Too few works is missing footage, which is what the widening round
+        # exists for. Refusing outright sent a live run home with four works of
+        # the five the contract wants, and nothing went looking for a fifth.
+        # The beats on the busiest works are the ones asking to be served from
+        # somewhere else, so they are what the next search is built from.
+        crowded = Counter(entry["candidate_id"] for entry in plan)
+        dominant = {asset for asset, _ in crowded.most_common(2)}
+        loaded = [entry["beat"] for entry in plan if entry["candidate_id"] in dominant]
+        raise UnmatchedBeats(
             f"the matching footage came from only {result['distinct_sources']} works, "
-            f"below the {required} the production contract requires")
+            f"below the {required} the production contract requires",
+            unmatched=loaded,
+            retry_queries=suggested_queries(beats, loaded))
     validate_source_diversity(plan)
     return {
         "beats": len(plan),

@@ -459,3 +459,45 @@ class AssetUrlTests(unittest.TestCase):
         self.assertTrue(catalogue_page_url(
             {"source_family": "NASA Images", "candidate_id": "PSI_Test-ID_28"}
         ).endswith("PSI_Test-ID_28"))
+
+
+class ThinPoolTests(unittest.TestCase):
+    """Too few works is missing footage, so it asks for more rather than refusing.
+
+    A live run matched every one of eighteen beats from four works and stopped
+    there, because the contract wants five and nothing went looking for a
+    fifth. The widening round already existed; it simply was not reachable from
+    this refusal.
+    """
+
+    SEEN = "A rocket on a launch pad wrapped in white smoke and exhaust"
+
+    def work(self, asset: str) -> dict:
+        return {"candidate_id": asset, "title": asset,
+                "selected_asset_page_url": f"https://images.nasa.gov/details/{asset}",
+                "direct_download_url": f"https://images-assets.nasa.gov/video/{asset}/x~orig.mp4",
+                "width": 1920, "height": 1080, "measured_duration_seconds": 90.0,
+                "frames": [{"index": n, "at_seconds": 10.0 * n, "describes": self.SEEN}
+                           for n in range(1, 5)]}
+
+    BEATS = [{"must_show": ["rocket", "launch pad"],
+              "visual_target": "A rocket on its launch pad in smoke",
+              "spoken_phrase": f"The rocket waits on the pad, moment {n}"}
+             for n in range(1, 19)]
+
+    def plan(self, works):
+        from .source_pool import plan_from_observations
+        return plan_from_observations(self.BEATS, works)
+
+    def test_four_works_ask_for_a_fifth_instead_of_refusing(self) -> None:
+        from .source_pool import UnmatchedBeats
+        with self.assertRaises(UnmatchedBeats) as caught:
+            self.plan([self.work(name) for name in "ABCD"])
+        self.assertIn("only 4 works", str(caught.exception))
+        self.assertTrue(caught.exception.retry_queries)
+        self.assertTrue(caught.exception.unmatched)
+
+    def test_five_works_are_planned_without_complaint(self) -> None:
+        result = self.plan([self.work(name) for name in "ABCDE"])
+        self.assertEqual(result["distinct_sources"], 5)
+        self.assertEqual(len(result["beat_plan"]), 18)
