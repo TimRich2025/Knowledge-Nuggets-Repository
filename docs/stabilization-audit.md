@@ -25,7 +25,7 @@ Stand: 7. Oktober 2026, Basis `main` bei `5c6eb658`. Diese Analyse beschreibt de
 | Musikdateien | optionales Soundbett | Keine Audiodatei im Repo; heutiger Renderer akzeptiert Stille |
 | Google/YouTube API | optionaler Upload und Trenddaten | Muss explizit ausgeschaltet bleiben |
 
-Die Docker-Compose-Datei nennt einen VPS und getrennte API/Worker-Dienste; `vps/service.py` enthält außerdem einen gemeinsamen API/Worker-Prozess für ein einzelnes Deployment. Welche Variante tatsächlich läuft, ist noch offen.
+Railway-Lesezugriff zeigt im Projekt „Knowledge Nuggets Production“ einen Worker auf Branch `main` mit Dockerfile, Startbefehl `python -m vps.entrypoint` und persistentem `/data`-Volume. Ein älterer API-Dienst schläft, `kn-render-api-v2` ist fehlgeschlagen; Redis/Queue und Worker melden erfolgreiche Deployments vom September. Die Docker-Compose-Datei nennt zusätzlich einen VPS mit getrennten Diensten; `vps/service.py` enthält den kombinierten Prozess. Aus dem Repository allein folgt nicht, welcher HTTP-Endpunkt Make aktuell verwendet.
 
 ## C. Nachweislich stabile Komponenten
 
@@ -39,7 +39,7 @@ Die letzten 15 erfassten `KN Narration QC`-Runs auf wechselnden Commits waren er
 - Untertitel: Wortzeiten werden erzeugt und in ASS platziert, aber es gibt keinen wiederholten objektiven Vergleich von hörbarem Wortbeginn und sichtbarem Einblenden am finalen MP4.
 - Musik: sie wird bei vorhandener Datei geduckt; fehlt sie, gilt der Render trotzdem als erfolgreich. Das erfüllt den künftigen Quality Gate nicht.
 - Qualitätsstatus: `RENDER_READY` und Redis `COMPLETED` bezeichnen technische Fertigstellung; ein eigenständiges `QUALITY_PASS` existiert nicht.
-- Publikation: Der alte Konfigurationsdefault war `KN_YOUTUBE_UPLOAD_ENABLED=true`. Bestehende Deployment-Variablen können diesen Default weiterhin überschreiben.
+- Publikation: Der auf `main` laufende Worker hat den Code-Default `KN_YOUTUBE_UPLOAD_ENABLED=true`; die Variable ist in seiner Railway-Variablenliste **nicht** gesetzt. Das bedeutet, dass ein fertig gerenderter Job den privaten Uploadpfad versuchen kann, falls ein OAuth-Token im geschützten Redis-Store liegt. Die Branch-Änderung schützt den laufenden Worker erst nach einem gesonderten Deployment. Bis dahin keine Produktionsjobs auslösen.
 
 ## E. Unnötige Komplexität und F. kritische Qualität
 
