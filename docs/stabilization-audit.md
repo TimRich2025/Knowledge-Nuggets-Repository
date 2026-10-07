@@ -39,7 +39,7 @@ Die letzten 15 erfassten `KN Narration QC`-Runs auf wechselnden Commits waren er
 - Untertitel: Wortzeiten werden erzeugt und in ASS platziert, aber es gibt keinen wiederholten objektiven Vergleich von hörbarem Wortbeginn und sichtbarem Einblenden am finalen MP4.
 - Musik: sie wird bei vorhandener Datei geduckt; fehlt sie, gilt der Render trotzdem als erfolgreich. Das erfüllt den künftigen Quality Gate nicht.
 - Qualitätsstatus: `RENDER_READY` und Redis `COMPLETED` bezeichnen technische Fertigstellung; ein eigenständiges `QUALITY_PASS` existiert nicht.
-- Publikation: Der auf `main` laufende Worker hat den Code-Default `KN_YOUTUBE_UPLOAD_ENABLED=true`; die Variable ist in seiner Railway-Variablenliste **nicht** gesetzt. Das bedeutet, dass ein fertig gerenderter Job den privaten Uploadpfad versuchen kann, falls ein OAuth-Token im geschützten Redis-Store liegt. Die Branch-Änderung schützt den laufenden Worker erst nach einem gesonderten Deployment. Bis dahin keine Produktionsjobs auslösen.
+- Publikation: Der auf `main` laufende Worker hatte den Code-Default `KN_YOUTUBE_UPLOAD_ENABLED=true`; die Variable war zunächst **nicht** gesetzt. Ein fertig gerenderter Job hätte den privaten Uploadpfad versuchen können, falls ein OAuth-Token im geschützten Redis-Store liegt. Am 7. Oktober wurde `KN_YOUTUBE_UPLOAD_ENABLED=false` für den laufenden Railway-Worker gesetzt. Das neue Deployment meldet `SUCCESS`, der Worker verbindet sich mit Redis und `/health` liefert 200. Railway zeigt Variablenwerte bei erneutem Lesen geschwärzt an; der Setzvorgang bestätigte den Wert. Unabhängige Uploadpfade in Make sind ohne Einsicht in das Szenario nicht auszuschließen.
 
 ## E. Unnötige Komplexität und F. kritische Qualität
 
@@ -48,6 +48,8 @@ Parallel gepflegte Renderwege (`render.py`, `render_core.py`, `renderer.py`, `vp
 ## G. Kleinster stabiler Kern: Stufe 1
 
 `vps.stress_test` verwendet den **bestehenden** `render_job` mit fünf lokalen FFmpeg-Testclips, einem festen Ton und vollständigen Szenen- und Wortzeitdaten. Die Testmedien sind nur technische Fixtures. Der Test prüft zehn komplette Renderer-Durchläufe hintereinander, ohne API, Make, Redis, Netzwerk, TTS oder YouTube. Er beendet die Serie bei einem Fehler und schreibt eine Run-ID, Hashes der Assets, Laufzeiten, Einzelfehler und `TECHNICAL_PASS` bzw. `TECHNICAL_FAIL` in ein Manifest. `quality_status=NOT_EVALUATED` ist Absicht. Die neue Action läuft nur auf dem isolierten Entwicklungsbranch oder per Hand. Vor einer Freigabe der nächsten Stufe sind zehn echte Erfolge aus einem Lauf nachzuweisen.
+
+Nachweis: Die endgültige Stufe-1-Fassung prüft zusätzlich Video- und Audiostream sowie die vollständige Fehlerfreiheit beim Dekodieren des MP4. Lokal wurden zehn aufeinanderfolgende vollständige Durchläufe mit Ersatzfonts erfolgreich ausgeführt. Auf GitHub wurden zehn aufeinanderfolgende Durchläufe mit den Produktionsfonts im [Workflow-Run 37581790965](https://github.com/TimRich2025/Knowledge-Nuggets-Repository/actions/runs/37581790965) erfolgreich ausgeführt; das technische Manifest liegt im Run-Artefakt. Dies bestätigt den isolierten Renderer-Kern, nicht TTS, Quellen, Make oder kreative Qualität.
 
 ## H. Kontrollierter Ausbau
 
