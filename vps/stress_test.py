@@ -17,6 +17,19 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True, capture_output=True, text=True)
 
 
+def verify_mp4(path: Path) -> None:
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height",
+         "-of", "json", str(path)], check=True, capture_output=True, text=True)
+    streams = json.loads(probe.stdout)["streams"]
+    if not any(s.get("codec_type") == "video" and s.get("width") == 1080
+               and s.get("height") == 1920 for s in streams):
+        raise ValueError("final MP4 is missing the 1080x1920 video stream")
+    if not any(s.get("codec_type") == "audio" for s in streams):
+        raise ValueError("final MP4 is missing its audio stream")
+    run(["ffmpeg", "-v", "error", "-xerror", "-i", str(path), "-f", "null", "-"])
+
+
 def fixtures(root: Path) -> tuple[dict, dict]:
     clips = []
     for index in range(5):
@@ -85,6 +98,7 @@ def main() -> None:
                 work.mkdir()
                 try:
                     result = render_job(job, ingested, work)
+                    verify_mp4(Path(result["preview_path"]))
                     manifest["attempts"].append({"iteration": index, "status": "TECHNICAL_PASS",
                         "duration_seconds": result["duration_seconds"],
                         "layout_header_mae": result["layout_header_mae"],
