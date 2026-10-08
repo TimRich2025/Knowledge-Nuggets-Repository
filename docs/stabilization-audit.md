@@ -1,10 +1,10 @@
 # Knowledge Nuggets: Bestandsaufnahme und kontrollierter Ausbau
 
-Stand: 7. Oktober 2026, Basis `main` bei `5c6eb658`. Diese Analyse beschreibt den Repository-Code. Sie beweist weder den Zustand eines laufenden Make-Szenarios noch die aktuelle Railway-Konfiguration.
+Stand: 8. Oktober 2026, Basis `main` bei `5c6eb658`. Repository-Code, Railway-Worker und die Make-Szenarien wurden getrennt geprüft. Historische Make-Runs belegen nur die jeweils ausgeführten Module, keinen erfolgreichen Short.
 
 ## A. Aktuelle Architektur
 
-1. Make erstellt Inhalt und ruft den Worker über HTTP auf. Die tatsächliche Make-Konfiguration ist nicht im Repository versioniert.
+1. Make erstellt Inhalt und ruft den Worker über HTTP auf. Die Make-Konfiguration ist nicht im Repository versioniert; die aktiven Szenarien wurden am 8. Oktober im angemeldeten Make-Konto lesend geprüft.
 2. Der FastAPI-Dienst (`vps/api.py`) bietet Quellenkandidaten, Storyboard- und Plan-Endpunkte sowie `POST /jobs`; Redis hält Jobs und Source-Pools.
 3. Der Worker (`vps/worker.py`) holt Jobs aus Redis. `vps/source_cache.py` erzeugt Edge-TTS samt Wortzeiten, lädt Videoausschnitte herunter und prüft sie mit FFprobe.
 4. `vps/local_renderer.py` schneidet die lokalen Clips mit FFmpeg, setzt Layout und Wortanimation, mischt gegebenenfalls Musik und prüft das Headerbild.
@@ -15,7 +15,7 @@ Stand: 7. Oktober 2026, Basis `main` bei `5c6eb658`. Diese Analyse beschreibt de
 
 | Abhängigkeit | Aufgabe | Grenze |
 | --- | --- | --- |
-| Make | Orchestrierung, LLM-/Vision-Schritte und Callback | Szenariodaten fehlen im Repository; kein Nachweis über aktive Konfiguration |
+| Make | Orchestrierung, LLM-/Vision-Schritte und Callback | Szenariodaten fehlen im Repository; aktive Module und Historie separat geprüft |
 | GitHub Actions | Unit-Tests, Audio-QC, Quellensuche | Grüne Runs sagen nichts über Videogüte oder zehn End-to-End-Runs |
 | Redis und Host (VPS/Railway) | Queue, Token, Cache, Worker, persistente MP4s | Deployment- und Umgebungszustand hier nicht verifiziert |
 | Microsoft Edge-TTS | gesprochener Text und Zeitmarken | Externes Netzwerk; Rate und Stimmenqualität separat prüfen |
@@ -26,6 +26,18 @@ Stand: 7. Oktober 2026, Basis `main` bei `5c6eb658`. Diese Analyse beschreibt de
 | Google/YouTube API | optionaler Upload und Trenddaten | Muss explizit ausgeschaltet bleiben |
 
 Railway-Lesezugriff zeigt im Projekt „Knowledge Nuggets Production“ einen Worker auf Branch `main` mit Dockerfile, Startbefehl `python -m vps.entrypoint` und persistentem `/data`-Volume. Ein älterer API-Dienst schläft, `kn-render-api-v2` ist fehlgeschlagen; Redis/Queue und Worker melden erfolgreiche Deployments vom September. Die Docker-Compose-Datei nennt zusätzlich einen VPS mit getrennten Diensten; `vps/service.py` enthält den kombinierten Prozess. Aus dem Repository allein folgt nicht, welcher HTTP-Endpunkt Make aktuell verwendet.
+
+## Make-Bestandsaufnahme vom 8. Oktober 2026
+
+Im Team `2019909` sind die Szenarien `KN 02 | Content Intelligence` (9783555), `KN 03 | Visual Intelligence` (9783563), `KN 03B | Shot Manifest and Gate` (9875497), `KN 04 | Production Engine` (9783567) und `KN 04B | Render Callback` (9802445) aktiv. Außerdem existieren drei KN-Diagnoseszenarien. Keine Make-Ausführung wurde bei der Bestandsaufnahme gestartet. Andere Projekte wurden nicht verändert.
+
+- `KN 02`: zahlreiche API-Runs am 27./28. September meldeten Erfolg. Das belegt Skript-/Shot-Brief-Erzeugung, nicht nachfolgende Videoqualität. Ein einzelner Lauf verbrauchte teils über 100 Make-Credits.
+- `KN 03`: am 28. September wechselten Success, Error und Warning; sieben unaufgelöste Incomplete Executions waren sichtbar. Im jüngsten Warnlauf `6dbce079...` erledigten Suchplanung und Kandidatensuche ihre Arbeit; `V1 | Look At The Footage` scheiterte an Gemini HTTP 429, Free-Tier-Quota 20 Requests für `gemini-3.8-flash`. Eine zufällige Wiederholung oder ein bezahltes Upgrade löst den Architekturfehler nicht.
+- `KN 03B`: der einzige sichtbare Success-Lauf `561b81e5...` führte nur `Verified Shot Manifest Builder` und `Parse Shot Manifest` aus. Die im Advanced Log aufgeführten Module `Visual Coverage Gate`, `Record Gate Decision` und `Launch Production Engine Async` wurden lediglich initialisiert und finalisiert, nicht ausgeführt. **Success ist hier kein Gate-Pass.** Drei weitere Starts am 28. September scheiterten vor der ersten Operation.
+- `KN 04`: mehrere API-Success-Runs reichten bis `Queue Persistent Railway Render` und `Return output`. Das beweist nur die Annahme eines asynchronen Renderjobs. Ein Error-Lauf `1cb39267...` scheiterte an HTTP 422: `production_status must be READY`.
+- `KN 04B`: der jüngste sichtbare Callback-Run `437701e3...` speicherte das Renderer-Ergebnis, dann sperrte der Filter `Only technically valid Railway previews` den Review-Payload. Der Make-Run war dennoch `Success`. Die Callback-Historie belegt keine finale kreative Abnahme.
+
+Diese Befunde erklären die Differenz zwischen grünen Teilruns und fehlenden freigegebenen Shorts. Für Stufe 10 sind Run-ID, technischer Endstatus und eigenständiger Quality-Status über alle Szenarien und den Worker hinweg zu korrelieren. Vorher keine der Teilhistorien als End-to-End-Stabilitätsserie zählen.
 
 ## C. Nachweislich stabile Komponenten
 
