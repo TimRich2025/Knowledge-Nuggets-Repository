@@ -37,6 +37,8 @@ Im Team `2019909` sind die Szenarien `KN 02 | Content Intelligence` (9783555), `
 - `KN 04`: mehrere API-Success-Runs reichten bis `Queue Persistent Railway Render` und `Return output`. Das beweist nur die Annahme eines asynchronen Renderjobs. Ein Error-Lauf `1cb39267...` scheiterte an HTTP 422: `production_status must be READY`.
 - `KN 04B`: der jüngste sichtbare Callback-Run `437701e3...` speicherte das Renderer-Ergebnis, dann sperrte der Filter `Only technically valid Railway previews` den Review-Payload. Der Make-Run war dennoch `Success`. Die Callback-Historie belegt keine finale kreative Abnahme.
 
+Im aktuellen Diagramm von `KN 04` endet die Kette nach HTTP-Jobqueue, Datensatz und Szenario-Output; in `KN 04B` endet sie nach Callback-Datensatz, Review-Payload und Webhook-Antwort. In diesen zwei geprüften Szenarien ist kein YouTube-Modul sichtbar. Andere KN-Szenarien und abweichende Versionen sind damit nicht pauschal ausgeschlossen.
+
 Diese Befunde erklären die Differenz zwischen grünen Teilruns und fehlenden freigegebenen Shorts. Für Stufe 10 sind Run-ID, technischer Endstatus und eigenständiger Quality-Status über alle Szenarien und den Worker hinweg zu korrelieren. Vorher keine der Teilhistorien als End-to-End-Stabilitätsserie zählen.
 
 ## C. Nachweislich stabile Komponenten
