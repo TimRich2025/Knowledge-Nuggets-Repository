@@ -628,16 +628,12 @@ def plan_from_observations(
     result = plan_by_content(beats, candidates, match_floor=match_floor)
     plan = result["plan"]
     required = min(MIN_DISTINCT_SOURCES, len(beats))
-    # The matcher may fill gaps with a neighbour's clip or with any spare clip.
-    # Such an assignment is not visual proof, even when the plan is complete.
-    unverified = sorted(set(result["unmatched_beats"]) |
-                        {entry["beat"] for entry in plan if entry.get("served_by")})
-    if unverified:
-        retry = suggested_queries(beats, unverified)
+    if result["unmatched_beats"]:
+        retry = suggested_queries(beats, result["unmatched_beats"])
         raise UnmatchedBeats(
-            f"no verified footage matches beats {unverified}; search again instead "
+            f"no verified footage matches beats {result['unmatched_beats']}; search again instead "
             f"of rendering an unverified pairing",
-            unmatched=unverified, retry_queries=retry)
+            unmatched=result["unmatched_beats"], retry_queries=retry)
     if result["distinct_sources"] < required:
         # Too few works is missing footage, which is what the widening round
         # exists for. Refusing outright sent a live run home with four works of
@@ -726,3 +722,4 @@ def widen_for_beats(
     seen = {work["candidate_id"] for work in known}
     fresh = [work for work in found if work["candidate_id"] not in seen][:WORKS_PER_WIDENING]
     return describe_request(fresh, base_url, build=build)
+
