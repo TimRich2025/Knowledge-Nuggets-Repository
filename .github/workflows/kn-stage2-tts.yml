@@ -1,0 +1,45 @@
+name: KN Stage 2 Dynamic TTS
+
+on:
+  push:
+    branches: [codex/kn-stage1-stability]
+    paths:
+      - vps/stage2_tts_test.py
+      - vps/source_cache.py
+      - vps/edge_word_tts.py
+      - vps/local_renderer.py
+      - vps/production_contract.py
+      - .github/workflows/kn-stage2-tts.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dynamic-tts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KN_YOUTUBE_UPLOAD_ENABLED: "false"
+      KN_DATA_DIR: /tmp/kn-stage2-data
+      KN_MUSIC_DIR: /tmp/kn-stage2-empty-music
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install existing TTS and renderer dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core fonts-noto-extra
+          python -m pip install Pillow==11.3.0 requests==2.32.5 edge-tts==7.2.8
+      - name: Ten consecutive dynamic narrations and complete renders
+        run: python -m vps.stage2_tts_test --output stage2-results
+      - name: Preserve technical manifest on failure or success
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kn-stage2-technical-manifest
+          path: stage2-results/stage2-manifest.json
+          if-no-files-found: warn
+          retention-days: 7
