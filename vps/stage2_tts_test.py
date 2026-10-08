@@ -64,11 +64,11 @@ def main() -> None:
                         "scenes": [dict(scene) for scene in fixture_job["scenes"]],
                     }
                     phrases = [
-                        f"Run {number} begins this sequence.",
-                        "Green shapes move across screen.",
-                        "Orange shapes cover the frame.",
-                        "Purple shapes appear and fade.",
-                        "Red shapes finish this sequence.",
+                        f"Run {number} begins with shapes crossing the frame.",
+                        "Green shapes move slowly across the entire screen.",
+                        "Orange shapes now cover the center of frame.",
+                        "Purple shapes appear briefly before fading away again.",
+                        "Red shapes finish the sequence with final motion.",
                     ]
                     for scene, phrase in zip(job["scenes"], phrases):
                         scene["spoken_phrase"] = phrase
