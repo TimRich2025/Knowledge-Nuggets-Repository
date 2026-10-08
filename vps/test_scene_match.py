@@ -85,20 +85,13 @@ class ContentPlanTests(unittest.TestCase):
             expected = "PAD" if beat is PAD_BEAT else "FLY"
             self.assertTrue(entry["candidate_id"].startswith(expected), entry)
 
-    def test_a_beat_nothing_shows_is_served_but_marked(self) -> None:
-        """Losing a whole Short over one beat is worse than a loose pairing.
-
-        What may never happen is a silent one: the entry says it was not
-        matched on its own evidence, so nothing downstream can read it as
-        proven.
-        """
+    def test_a_beat_nothing_shows_stays_unmatched(self) -> None:
         orbit = {"must_show": ["astronaut floating", "space station interior"],
                  "visual_target": "An astronaut floats inside the station",
                  "spoken_phrase": "An astronaut floats inside the station"}
         result = plan_by_content([PAD_BEAT, orbit], self._windows())
-        self.assertEqual(result["unmatched_beats"], [])
-        loose = next(entry for entry in result["plan"] if entry["beat"] == 2)
-        self.assertEqual(loose["served_by"], "best available")
+        self.assertEqual(result["unmatched_beats"], [2])
+        self.assertEqual([entry["beat"] for entry in result["plan"]], [1])
 
     def test_a_proved_beat_is_never_marked(self) -> None:
         result = plan_by_content([PAD_BEAT], self._windows())
@@ -684,50 +677,26 @@ class SameThirdFallbackTests(unittest.TestCase):
                 window("ASCENT", 20.0, "A rocket climbing high through a clear sky trailing exhaust"),
                 window("ASCENT", 28.0, "A rocket high in the sky above thin cloud")]
 
-    def test_the_stubborn_beat_is_served_by_its_neighbour_s_work(self) -> None:
+    def test_the_stubborn_beat_is_left_for_a_targeted_search(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        self.assertEqual(result["unmatched_beats"], [])
+        self.assertEqual(result["unmatched_beats"], [6])
 
-    def test_a_borrowed_beat_says_so(self) -> None:
-        result = plan_by_content(self.BEATS, self.windows())
-        borrowed = [entry for entry in result["plan"] if entry.get("served_by")]
-        self.assertEqual([entry["beat"] for entry in borrowed], [6])
-        self.assertEqual(borrowed[0]["served_by"], "same third")
-        self.assertEqual(borrowed[0]["candidate_id"], "ASCENT")
-
-    def test_a_borrowed_beat_still_carries_terms_to_describe(self) -> None:
-        result = plan_by_content(self.BEATS, self.windows())
-        borrowed = next(entry for entry in result["plan"] if entry.get("served_by"))
-        self.assertTrue(borrowed["matched_terms"])
-
-    def test_a_beat_from_another_subject_is_not_called_a_third_match(self) -> None:
-        """It is still served, but the mark says where that footage came from."""
+    def test_a_beat_from_another_subject_is_left_unmatched(self) -> None:
         beats = list(self.BEATS)
         beats[5] = {"must_show": ["seafloor", "submarine"],
                     "visual_target": "A submarine resting on the seafloor",
                     "spoken_phrase": "A submarine rests on the seafloor"}
         result = plan_by_content(beats, self.windows())
-        self.assertEqual(result["unmatched_beats"], [])
-        stray = next(entry for entry in result["plan"] if entry["beat"] == 6)
-        self.assertEqual(stray["served_by"], "best available")
+        self.assertEqual(result["unmatched_beats"], [6])
 
-    def test_a_scored_beat_is_never_marked_as_borrowed(self) -> None:
+    def test_other_beats_retain_scored_matches(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        scored = [entry for entry in result["plan"] if entry["beat"] != 6]
-        self.assertTrue(scored)
-        self.assertFalse([entry for entry in scored if entry.get("served_by")])
+        self.assertEqual(len(result["plan"]), 5)
+        self.assertTrue(all(entry["match_score"] >= MATCH_FLOOR for entry in result["plan"]))
 
 
 class NeverRefuseTests(unittest.TestCase):
-    """The channel ships a Short. It does not hold out for proof on every beat.
-
-    The channels this competes with do not prove that shot eleven illustrates
-    sentence eleven: they pick footage on the topic, cut it fast and let pace
-    and captions carry it. Two live runs were thrown away for being right about
-    seventeen beats of eighteen, which is worse by any measure a viewer can see.
-    What is kept is everything a viewer would notice: no slates, no repeats, no
-    single work carrying the Short, and a mark on every unproved pairing.
-    """
+    """Unproved beats remain unassigned until matching footage is found."""
 
     BEATS = [{"must_show": ["rocket", "launch pad"], "visual_target": "A rocket on its pad",
               "spoken_phrase": "A rocket waits on the launch pad"},
@@ -741,15 +710,14 @@ class NeverRefuseTests(unittest.TestCase):
                 window("SMOKE", 9.0, "White smoke rolling across the ground below a rocket"),
                 window("SKY", 14.0, "A rocket climbing through a clear blue sky")]
 
-    def test_every_beat_is_served(self) -> None:
+    def test_only_proved_beats_are_served(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        self.assertEqual(result["unmatched_beats"], [])
-        self.assertEqual(len(result["plan"]), 3)
+        self.assertEqual(result["unmatched_beats"], [2, 3])
+        self.assertEqual(len(result["plan"]), 1)
 
-    def test_the_unproved_ones_are_marked(self) -> None:
+    def test_the_unproved_ones_are_not_in_the_plan(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        marked = {entry["beat"] for entry in result["plan"] if entry.get("served_by")}
-        self.assertEqual(marked, {2, 3})
+        self.assertEqual({entry["beat"] for entry in result["plan"]}, {1})
 
     def test_a_slate_is_still_never_used(self) -> None:
         """Slate windows carry no terms, and a window with no terms is skipped."""
@@ -763,3 +731,4 @@ class NeverRefuseTests(unittest.TestCase):
         result = plan_by_content(self.BEATS, self.windows())
         used = [(entry["candidate_id"], entry["shot_start_seconds"]) for entry in result["plan"]]
         self.assertEqual(len(used), len(set(used)))
+
