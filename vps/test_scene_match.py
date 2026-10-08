@@ -182,16 +182,15 @@ class ObservationPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(SourcePoolError, "frame description"):
             plan_from_observations([PAD_BEAT], blind)
 
-    def test_a_beat_no_footage_shows_is_still_given_a_shot(self) -> None:
-        """It is marked, and it is never a slate: those carry no terms at all."""
-        from .source_pool import plan_from_observations
+    def test_a_beat_no_footage_shows_requests_new_footage(self) -> None:
+        """A spare clip on the wrong subject cannot pass the production gate."""
+        from .source_pool import UnmatchedBeats, plan_from_observations
         orbit = {"must_show": ["astronaut floating", "station interior"],
                  "visual_target": "An astronaut floats inside the station",
                  "spoken_phrase": "An astronaut floats inside the station"}
-        result = plan_from_observations([PAD_BEAT, orbit] * 3, self._works())
-        self.assertEqual(len(result["beat_plan"]), 6)
-        loose = [entry for entry in result["beat_plan"] if entry.get("served_by")]
-        self.assertTrue(loose)
+        with self.assertRaises(UnmatchedBeats) as caught:
+            plan_from_observations([PAD_BEAT, orbit] * 3, self._works())
+        self.assertIn(2, caught.exception.unmatched)
 
     def test_every_interval_lies_inside_the_measured_clip(self) -> None:
         from .source_pool import plan_from_observations
