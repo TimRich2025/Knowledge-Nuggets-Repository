@@ -20,7 +20,10 @@ CALLBACK_TOKEN = os.environ.get("KN_CALLBACK_TOKEN", "")
 ALLOWED_CALLBACK_URL = os.environ.get("KN_ALLOWED_CALLBACK_URL", "")
 PUBLIC_BASE_URL = os.environ.get("KN_PUBLIC_BASE_URL", "").rstrip("/")
 POLL_SECONDS = float(os.environ.get("KN_POLL_SECONDS", "2"))
-MAX_CACHE_GB = float(os.environ.get("KN_MAX_CACHE_GB", "80"))
+# Railway's persistent volume is also used for render intermediates and final
+# videos.  Keep the reusable source cache deliberately small so a long-running
+# worker always leaves enough headroom for FFmpeg's largest muxing phase.
+MAX_CACHE_GB = float(os.environ.get("KN_MAX_CACHE_GB", "1"))
 YOUTUBE_DATA_API_KEY = os.environ.get("KN_YOUTUBE_DATA_API_KEY", "")
 YOUTUBE_TREND_REGION = os.environ.get("KN_YOUTUBE_TREND_REGION", "US").upper()
 # Uploads require an explicit, separate production opt-in.

@@ -4,6 +4,7 @@ from pathlib import Path
 from redis import Redis
 from .config import REDIS_URL, TMP, YOUTUBE_OAUTH_REDIRECT_URI, YOUTUBE_OAUTH_REFRESH_TOKEN
 from .pipeline import process, callback
+from .source_cache import prune_cache
 from .youtube_publisher import YouTubePublishError, exchange_authorization_code
 
 def clean_work_dir(path: Path) -> None:
@@ -40,6 +41,8 @@ def main():
     # A restart must recover space left by interrupted or failed renders.
     for stale in TMP.iterdir():
         clean_work_dir(stale)
+    cache_cleanup=prune_cache()
+    print(f"KN startup cache cleanup: {cache_cleanup}",flush=True)
     print("KN worker ready; Redis queue connected",flush=True)
     while True:
         consume_youtube_oauth_code(r)

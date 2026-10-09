@@ -27,20 +27,33 @@ SESSION.mount("http://", HTTPAdapter(max_retries=Retry(
 
 class IngestError(RuntimeError): pass
 
-def prune_cache() -> None:
+def prune_cache() -> dict:
     limit=max(0.05,float(MAX_CACHE_GB))*1024**3
     files=[p for p in CACHE.iterdir() if p.is_file() and p.suffix != ".json"]
     total=sum(p.stat().st_size for p in files)
-    if total <= limit:
-        return
+    before=total
+    removed=0
     for p in sorted(files,key=lambda x:x.stat().st_atime):
         if total <= limit:
             break
-        size=p.stat().st_size
+        try:
+            size=p.stat().st_size
+        except FileNotFoundError:
+            continue
         key=p.stem
         p.unlink(missing_ok=True)
         (CACHE/f"{key}.json").unlink(missing_ok=True)
         total-=size
+        removed+=1
+    # Interrupted downloads are never reusable.  Remove them even when the
+    # regular cache is already below its byte limit.
+    for part in CACHE.glob("*.part*"):
+        if part.is_file():
+            size=part.stat().st_size
+            part.unlink(missing_ok=True)
+            total-=size
+            removed+=1
+    return {"before_bytes":before,"after_bytes":max(0,total),"removed_files":removed}
 
 
 def _key(url: str) -> str:
