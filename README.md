@@ -1,7 +1,13 @@
-# Knowledge Nuggets Renderer
+# Knowledge Nuggets
 
-Free GitHub Actions render engine for the Make.com Knowledge Nuggets YouTube pipeline.
+The current production path uses Make for orchestration and a persistent
+Redis-backed worker for asset ingestion and FFmpeg rendering. GitHub Actions
+contains component checks and source-hunt tools; a green Action is not a
+production quality pass.
 
-Make dispatches the workflow. GitHub Actions renders with FFmpeg and faster-whisper, publishes the resulting MP4 as a temporary release asset, and can callback into Make.
+Read [the stabilization audit](docs/stabilization-audit.md) before changing the
+pipeline. Its stage-1 workflow tests the existing renderer with fixed assets
+only. It does not generate a publishable Short.
 
-Do not commit credentials or API keys to this repository.
+YouTube uploading is disabled for this development phase. Do not commit
+credentials or API keys to this repository.

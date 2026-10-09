@@ -1,0 +1,45 @@
+name: KN Stage 1 Renderer
+
+on:
+  push:
+    branches: [codex/kn-stage1-stability]
+    paths:
+      - vps/stress_test.py
+      - vps/config.py
+      - .github/workflows/kn-stage1-renderer.yml
+      - layout_lock.py
+      - vps/local_renderer.py
+      - vps/production_contract.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixed-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      KN_YOUTUBE_UPLOAD_ENABLED: "false"
+      KN_DATA_DIR: /tmp/kn-stage1-data
+      KN_MUSIC_DIR: /tmp/kn-stage1-empty-music
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install render dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core fonts-noto-extra
+          python -m pip install Pillow==11.3.0
+      - name: Ten consecutive complete fixed-fixture renders
+        run: python -m vps.stress_test --iterations 10 --output stage1-results
+      - name: Save technical manifest, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kn-stage1-technical-manifest
+          path: stage1-results/stage1-manifest.json
+          if-no-files-found: warn
+          retention-days: 7

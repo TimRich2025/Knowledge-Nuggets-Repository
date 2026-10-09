@@ -197,102 +197,6 @@ def match_score(beat: dict[str, Any], seen: set[str]) -> float:
     return round(0.75 * met + 0.25 * extra, 4)
 
 
-def _same_third(position: int, other: int, total: int) -> bool:
-    """Whether two beats belong to the same third of the script."""
-    span = max(1, math.ceil(total / 3))
-    return position // span == other // span
-
-
-def _serve_from_the_same_third(beats, windows, chosen, used_windows, per_source,
-                               share_cap) -> set[int]:
-    """Give an unserved beat the work that is already carrying its third.
-
-    The script is written in three thirds and each third is deliberately one
-    visual subject, searched for as one thing. So when a beat finds nothing of
-    its own, its neighbours in that third are not a guess about what it needs:
-    they were written to need the same picture. A measured run ended with
-    seventeen beats matched and one left over, "Open sky surrounds the rising
-    rocket", because its brief asked for "open sky" and nobody describing a
-    still writes "open". Losing the whole Short over that word is worse than
-    giving that beat the ascent footage its neighbours are already using.
-
-    The beat still has to share a requirement with the neighbour it borrows
-    from, so this never reaches across subjects, and the variety rules still
-    decide which window it may take. A beat that borrows is marked, so nothing
-    downstream can mistake it for a scored match.
-    """
-    borrowed: set[int] = set()
-    total = len(beats)
-    for position in range(total):
-        if position in chosen:
-            continue
-        wanted = beat_requirements(beats[position])[0]
-        neighbours = sorted(
-            (other for other in chosen
-             if _same_third(position, other, total)
-             and wanted & beat_requirements(beats[other])[0]),
-            key=lambda other: (-len(wanted & beat_requirements(beats[other])[0]),
-                               abs(other - position), other))
-        for other in neighbours:
-            source = windows[chosen[other][0]]["candidate_id"]
-            if per_source[source] >= share_cap:
-                continue
-            spare = [index for index, window in enumerate(windows)
-                     if window["candidate_id"] == source
-                     and index not in used_windows
-                     and not _neighbour_conflict(chosen, windows, position, source)]
-            if not spare:
-                continue
-            index = min(spare, key=lambda candidate: (
-                -match_score(beats[position], windows[candidate]["seen"]), candidate))
-            chosen[position] = (index, round(match_score(beats[position],
-                                                         windows[index]["seen"]), 4))
-            used_windows.add(index)
-            per_source[source] += 1
-            borrowed.add(position)
-            break
-    return borrowed
-
-
-def _serve_from_what_is_left(beats, windows, chosen, used_windows, per_source,
-                             share_cap) -> set[int]:
-    """Give a beat the best footage still free, once nothing else has served it.
-
-    The channels this competes with do not prove that shot eleven illustrates
-    sentence eleven. They pick footage on the topic, cut it fast and let the
-    pace and the captions carry the viewer. Holding out for proof on every
-    single beat threw away whole Shorts that were right about seventeen of
-    eighteen, which is a worse outcome by any measure the viewer can see.
-
-    So the floor still decides who gets the good windows: every beat that can
-    be proved is served first, hardest-first, and only what is left over comes
-    here. What this never does is reach for a slate: those windows carry no
-    terms at all and are filtered out before scoring, so the worst this can
-    hand a beat is real footage on the wrong subject, not a NASA title card.
-    """
-    served: set[int] = set()
-    for position in range(len(beats)):
-        if position in chosen:
-            continue
-        free = [index for index, window in enumerate(windows)
-                if index not in used_windows
-                and window["seen"]
-                and per_source[window["candidate_id"]] < share_cap
-                and not _neighbour_conflict(chosen, windows, position,
-                                            window["candidate_id"])]
-        if not free:
-            continue
-        index = min(free, key=lambda candidate: (
-            -match_score(beats[position], windows[candidate]["seen"]),
-            per_source[windows[candidate]["candidate_id"]], candidate))
-        chosen[position] = (index, round(match_score(beats[position],
-                                                     windows[index]["seen"]), 4))
-        used_windows.add(index)
-        per_source[windows[index]["candidate_id"]] += 1
-        served.add(position)
-    return served
-
-
 def plan_by_content(
     beats: list[dict[str, Any]],
     windows: list[dict[str, Any]],
@@ -342,12 +246,6 @@ def plan_by_content(
         used_windows.add(index)
         per_source[windows[index]["candidate_id"]] += 1
 
-    # A beat with nothing of its own may still be served by its own third.
-    borrowed = _serve_from_the_same_third(beats, windows, chosen, used_windows,
-                                          per_source, share_cap)
-    leftover = _serve_from_what_is_left(beats, windows, chosen, used_windows,
-                                        per_source, share_cap)
-
     plan: list[dict[str, Any]] = []
     unmatched: list[int] = []
     for position, beat in enumerate(beats):
@@ -361,17 +259,7 @@ def plan_by_content(
         entry = {**{key: value for key, value in window.items() if key != "seen"},
                  "beat": position + 1,
                  "match_score": value,
-                 # A borrowed window may share nothing with this beat's own
-                 # words, and the manifest needs something to describe. What it
-                 # shows is what the window was seen to hold, so say that.
-                 "matched_terms": shared or sorted(window["seen"])[:6]}
-        # Which mechanism served it, not how high it scored: a beat can borrow
-        # from its own third and still sit below the floor, and calling that
-        # the same thing as a leftover pairing would lose the distinction.
-        if position in borrowed:
-            entry["served_by"] = "same third"
-        elif position in leftover:
-            entry["served_by"] = "best available"
+                 "matched_terms": shared}
         plan.append(entry)
     return {
         "plan": plan,
@@ -439,3 +327,4 @@ def _neighbour_conflict(chosen, windows, position, source) -> bool:
             run += 1
             cursor += step
     return run > MAX_CONSECUTIVE_SCENES_PER_SOURCE
+

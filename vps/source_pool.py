@@ -631,8 +631,8 @@ def plan_from_observations(
     if result["unmatched_beats"]:
         retry = suggested_queries(beats, result["unmatched_beats"])
         raise UnmatchedBeats(
-            f"no observed footage matches beats {result['unmatched_beats']}; every "
-            f"window scored below {match_floor}",
+            f"no verified footage matches beats {result['unmatched_beats']}; search again instead "
+            f"of rendering an unverified pairing",
             unmatched=result["unmatched_beats"], retry_queries=retry)
     if result["distinct_sources"] < required:
         # Too few works is missing footage, which is what the widening round
@@ -722,3 +722,4 @@ def widen_for_beats(
     seen = {work["candidate_id"] for work in known}
     fresh = [work for work in found if work["candidate_id"] not in seen][:WORKS_PER_WIDENING]
     return describe_request(fresh, base_url, build=build)
+

@@ -2,7 +2,7 @@ name: KN Narration QC
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/kn-stage1-stability]
     paths:
       - vps/source_cache.py
       - vps/edge_word_tts.py
