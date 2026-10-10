@@ -85,13 +85,14 @@ class ContentPlanTests(unittest.TestCase):
             expected = "PAD" if beat is PAD_BEAT else "FLY"
             self.assertTrue(entry["candidate_id"].startswith(expected), entry)
 
-    def test_a_beat_nothing_shows_stays_unmatched(self) -> None:
+    def test_a_beat_nothing_shows_uses_approved_fallback_footage(self) -> None:
         orbit = {"must_show": ["astronaut floating", "space station interior"],
                  "visual_target": "An astronaut floats inside the station",
                  "spoken_phrase": "An astronaut floats inside the station"}
         result = plan_by_content([PAD_BEAT, orbit], self._windows())
-        self.assertEqual(result["unmatched_beats"], [2])
-        self.assertEqual([entry["beat"] for entry in result["plan"]], [1])
+        self.assertEqual(result["unmatched_beats"], [])
+        self.assertEqual([entry["beat"] for entry in result["plan"]], [1, 2])
+        self.assertEqual(result["plan"][1]["served_by"], "best available")
 
     def test_a_proved_beat_is_never_marked(self) -> None:
         result = plan_by_content([PAD_BEAT], self._windows())
@@ -175,15 +176,16 @@ class ObservationPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(SourcePoolError, "frame description"):
             plan_from_observations([PAD_BEAT], blind)
 
-    def test_a_beat_no_footage_shows_requests_new_footage(self) -> None:
-        """A spare clip on the wrong subject cannot pass the production gate."""
-        from .source_pool import UnmatchedBeats, plan_from_observations
+    def test_a_beat_no_footage_shows_uses_reviewed_spare_footage(self) -> None:
+        """A literal miss may use a window the vision pass still approved."""
+        from .source_pool import plan_from_observations
         orbit = {"must_show": ["astronaut floating", "station interior"],
                  "visual_target": "An astronaut floats inside the station",
                  "spoken_phrase": "An astronaut floats inside the station"}
-        with self.assertRaises(UnmatchedBeats) as caught:
-            plan_from_observations([PAD_BEAT, orbit] * 3, self._works())
-        self.assertIn(2, caught.exception.unmatched)
+        result = plan_from_observations([PAD_BEAT, orbit] * 3, self._works())
+        self.assertEqual(len(result["beat_plan"]), 6)
+        self.assertTrue(any(entry.get("served_by") == "best available"
+                            for entry in result["beat_plan"]))
 
     def test_every_interval_lies_inside_the_measured_clip(self) -> None:
         from .source_pool import plan_from_observations
@@ -692,26 +694,30 @@ class SameThirdFallbackTests(unittest.TestCase):
                 window("ASCENT", 20.0, "A rocket climbing high through a clear sky trailing exhaust"),
                 window("ASCENT", 28.0, "A rocket high in the sky above thin cloud")]
 
-    def test_the_stubborn_beat_is_left_for_a_targeted_search(self) -> None:
+    def test_the_stubborn_beat_borrows_from_its_visual_third(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        self.assertEqual(result["unmatched_beats"], [6])
+        self.assertEqual(result["unmatched_beats"], [])
+        self.assertEqual(result["plan"][5]["served_by"], "same third")
 
-    def test_a_beat_from_another_subject_is_left_unmatched(self) -> None:
+    def test_a_beat_from_another_subject_uses_the_best_safe_window(self) -> None:
         beats = list(self.BEATS)
         beats[5] = {"must_show": ["seafloor", "submarine"],
                     "visual_target": "A submarine resting on the seafloor",
                     "spoken_phrase": "A submarine rests on the seafloor"}
         result = plan_by_content(beats, self.windows())
-        self.assertEqual(result["unmatched_beats"], [6])
+        self.assertEqual(result["unmatched_beats"], [])
+        self.assertEqual(result["plan"][5]["served_by"], "best available")
 
     def test_other_beats_retain_scored_matches(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        self.assertEqual(len(result["plan"]), 5)
-        self.assertTrue(all(entry["match_score"] >= MATCH_FLOOR for entry in result["plan"]))
+        self.assertEqual(len(result["plan"]), 6)
+        self.assertTrue(all(entry["match_score"] >= MATCH_FLOOR
+                            for entry in result["plan"][:5]))
+        self.assertNotIn("served_by", result["plan"][4])
 
 
-class NeverRefuseTests(unittest.TestCase):
-    """Unproved beats remain unassigned until matching footage is found."""
+class SafeFallbackTests(unittest.TestCase):
+    """A complete Short may use only real, vision-approved spare windows."""
 
     BEATS = [{"must_show": ["rocket", "launch pad"], "visual_target": "A rocket on its pad",
               "spoken_phrase": "A rocket waits on the launch pad"},
@@ -725,14 +731,16 @@ class NeverRefuseTests(unittest.TestCase):
                 window("SMOKE", 9.0, "White smoke rolling across the ground below a rocket"),
                 window("SKY", 14.0, "A rocket climbing through a clear blue sky")]
 
-    def test_only_proved_beats_are_served(self) -> None:
+    def test_safe_spare_windows_complete_the_plan(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        self.assertEqual(result["unmatched_beats"], [2, 3])
-        self.assertEqual(len(result["plan"]), 1)
+        self.assertEqual(result["unmatched_beats"], [])
+        self.assertEqual(len(result["plan"]), 3)
 
-    def test_the_unproved_ones_are_not_in_the_plan(self) -> None:
+    def test_fallback_entries_are_explicitly_marked(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())
-        self.assertEqual({entry["beat"] for entry in result["plan"]}, {1})
+        self.assertEqual({entry["beat"] for entry in result["plan"]}, {1, 2, 3})
+        self.assertEqual({entry.get("served_by") for entry in result["plan"][1:]},
+                         {"best available"})
 
     def test_a_slate_is_still_never_used(self) -> None:
         """Slate windows carry no terms, and a window with no terms is skipped."""
@@ -741,6 +749,18 @@ class NeverRefuseTests(unittest.TestCase):
                   {**window("CARD", 14.0, ""), "seen": set()}]
         result = plan_by_content(self.BEATS, slates)
         self.assertEqual({entry["candidate_id"] for entry in result["plan"]}, {"PAD"})
+        self.assertEqual(result["unmatched_beats"], [2, 3])
+
+    def test_unsafe_source_text_is_never_used_as_fallback(self) -> None:
+        frames = [{"index": 1, "at_seconds": 9.0,
+                   "describes": "Rocket launch title TEXT UNSAFE CROPPED"}]
+        unsafe = {**window("UNSAFE_TEXT", 8.0, ""),
+                  "seen": window_terms(frames, 8.0, 11.2)}
+        result = plan_by_content(self.BEATS,
+                                 [window("PAD", 4.0, "A rocket on a launch pad"), unsafe])
+        self.assertNotIn("UNSAFE_TEXT",
+                         {entry["candidate_id"] for entry in result["plan"]})
+        self.assertEqual(result["unmatched_beats"], [2, 3])
 
     def test_no_window_is_handed_out_twice(self) -> None:
         result = plan_by_content(self.BEATS, self.windows())

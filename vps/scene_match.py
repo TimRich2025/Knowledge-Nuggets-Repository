@@ -10,8 +10,9 @@ This module works from observed frames instead: real stills pulled from the clip
 at known times and described by a vision pass. A window is scored on what its
 own frames were seen to contain, a beat is scored against what it says it needs,
 and the assignment is the best pairing that still satisfies the footage-variety
-contract. A beat that nothing matches is reported as unmatched rather than
-quietly given the least bad option.
+contract. Exact matches are allocated first. Any remaining beat may then use
+the best still-free window that the vision pass has already approved as real,
+text-safe footage, so one overly literal brief cannot discard a complete Short.
 """
 from __future__ import annotations
 
@@ -205,6 +206,88 @@ def match_score(beat: dict[str, Any], seen: set[str]) -> float:
     return round(0.75 * met + 0.25 * extra, 4)
 
 
+def _same_third(position: int, other: int, total: int) -> bool:
+    """Whether two beats belong to the same third of the script."""
+    span = max(1, math.ceil(total / 3))
+    return position // span == other // span
+
+
+def _serve_from_the_same_third(beats, windows, chosen, used_windows, per_source,
+                               share_cap) -> set[int]:
+    """Borrow unused, approved footage from the same visual third.
+
+    Each script third is prompted around one visual subject. If a beat misses
+    the literal match floor but shares a requirement with a proved neighbour,
+    an unused window from that neighbour's work is the most coherent fallback.
+    Empty ``seen`` sets are never eligible: they represent a slate, unsafe
+    source text or footage the vision pass could not verify.
+    """
+    borrowed: set[int] = set()
+    total = len(beats)
+    for position in range(total):
+        if position in chosen:
+            continue
+        wanted = beat_requirements(beats[position])[0]
+        neighbours = sorted(
+            (other for other in chosen
+             if _same_third(position, other, total)
+             and wanted & beat_requirements(beats[other])[0]),
+            key=lambda other: (-len(wanted & beat_requirements(beats[other])[0]),
+                               abs(other - position), other))
+        for other in neighbours:
+            source = windows[chosen[other][0]]["candidate_id"]
+            if per_source[source] >= share_cap:
+                continue
+            spare = [index for index, window in enumerate(windows)
+                     if window["candidate_id"] == source
+                     and index not in used_windows
+                     and window["seen"]
+                     and not _neighbour_conflict(chosen, windows, position, source)]
+            if not spare:
+                continue
+            index = min(spare, key=lambda candidate: (
+                -match_score(beats[position], windows[candidate]["seen"]), candidate))
+            chosen[position] = (index, round(match_score(beats[position],
+                                                         windows[index]["seen"]), 4))
+            used_windows.add(index)
+            per_source[source] += 1
+            borrowed.add(position)
+            break
+    return borrowed
+
+
+def _serve_from_what_is_left(beats, windows, chosen, used_windows, per_source,
+                             share_cap) -> set[int]:
+    """Fill remaining beats with the best unused, approved footage.
+
+    Exact matches and same-third borrowing always run first. This final pass
+    preserves the source-share and neighbour rules while refusing any window
+    with an empty ``seen`` set, which keeps title cards, clipped lettering and
+    unobserved footage out of the rendered Short.
+    """
+    served: set[int] = set()
+    for position in range(len(beats)):
+        if position in chosen:
+            continue
+        free = [index for index, window in enumerate(windows)
+                if index not in used_windows
+                and window["seen"]
+                and per_source[window["candidate_id"]] < share_cap
+                and not _neighbour_conflict(chosen, windows, position,
+                                            window["candidate_id"])]
+        if not free:
+            continue
+        index = min(free, key=lambda candidate: (
+            -match_score(beats[position], windows[candidate]["seen"]),
+            per_source[windows[candidate]["candidate_id"]], candidate))
+        chosen[position] = (index, round(match_score(beats[position],
+                                                     windows[index]["seen"]), 4))
+        used_windows.add(index)
+        per_source[windows[index]["candidate_id"]] += 1
+        served.add(position)
+    return served
+
+
 def plan_by_content(
     beats: list[dict[str, Any]],
     windows: list[dict[str, Any]],
@@ -254,6 +337,11 @@ def plan_by_content(
         used_windows.add(index)
         per_source[windows[index]["candidate_id"]] += 1
 
+    borrowed = _serve_from_the_same_third(beats, windows, chosen, used_windows,
+                                          per_source, share_cap)
+    leftover = _serve_from_what_is_left(beats, windows, chosen, used_windows,
+                                        per_source, share_cap)
+
     plan: list[dict[str, Any]] = []
     unmatched: list[int] = []
     for position, beat in enumerate(beats):
@@ -267,7 +355,11 @@ def plan_by_content(
         entry = {**{key: value for key, value in window.items() if key != "seen"},
                  "beat": position + 1,
                  "match_score": value,
-                 "matched_terms": shared}
+                 "matched_terms": shared or sorted(window["seen"])[:6]}
+        if position in borrowed:
+            entry["served_by"] = "same third"
+        elif position in leftover:
+            entry["served_by"] = "best available"
         plan.append(entry)
     return {
         "plan": plan,
