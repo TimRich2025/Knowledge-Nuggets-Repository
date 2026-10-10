@@ -55,6 +55,47 @@ class ProductionContractTests(unittest.TestCase):
                 "scenes": [SCENE],
             })
 
+    def test_normal_narration_text_may_span_visual_beats(self) -> None:
+        chunks = [
+            "Rocket stands on its launch pad",
+            "while engines ignite beneath it",
+            "then it climbs past the tower",
+        ]
+        scenes = []
+        for index, phrase in enumerate(chunks):
+            words = phrase.split()
+            scenes.append({
+                "spoken_phrase": phrase,
+                "plain_language": True,
+                "caption_beats": [
+                    " ".join(words[start:start + 4])
+                    for start in range(0, len(words), 4)
+                ],
+                "shot_start_seconds": 1.0,
+                "shot_end_seconds": 4.2,
+                "selected_asset_page_url": f"https://images.nasa.gov/details/N{index}",
+            })
+        validate_submission_contract({
+            "tts_provider": "EDGE",
+            "tts_voice": "en-US-AndrewMultilingualNeural",
+            "tts_rate": "+8%",
+            "narration_text": (
+                "Rocket stands on its launch pad while engines ignite beneath it. "
+                "Then it climbs past the tower."
+            ),
+            "scenes": scenes,
+        })
+
+    def test_narration_text_cannot_drift_from_the_subtitles(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly the spoken_phrase words"):
+            validate_submission_contract({
+                "tts_provider": "EDGE",
+                "tts_voice": "en-US-AndrewMultilingualNeural",
+                "tts_rate": "+8%",
+                "narration_text": "Different narration entirely.",
+                "scenes": [SCENE],
+            })
+
 
 if __name__ == "__main__":
     unittest.main()

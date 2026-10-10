@@ -95,6 +95,5 @@ class BeatSplittingTests(unittest.TestCase):
         with self.assertRaisesRegex(IngestError, "more words than the script"):
             split_narration_at_word_boundaries(PHRASES, spoken, total)
 
-
 if __name__ == "__main__":
     unittest.main()

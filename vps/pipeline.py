@@ -37,7 +37,7 @@ def process(job: dict, work_dir: Path, youtube_refresh_token: str | None = None)
     result={**result,"content_id":content_id,"preview_path":str(final_preview),"preview_url":preview_url,"elapsed_seconds":round(time.time()-started,2)}
     if YOUTUBE_UPLOAD_ENABLED:
         topic = str(job.get("topic") or " ".join(job.get("core_question_lines") or [])).strip()
-        fact_statement = str(job.get("fact_statement") or " ".join(
+        fact_statement = str(job.get("fact_statement") or job.get("narration_text") or " ".join(
             str(scene.get("spoken_phrase") or "") for scene in job.get("scenes") or []
         )).strip()
         metadata = build_social_metadata(topic, fact_statement)

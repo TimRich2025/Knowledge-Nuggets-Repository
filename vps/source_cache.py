@@ -351,6 +351,7 @@ def synthesize_continuous_narration(
     scenes: list[dict],
     voice: str,
     rate: str,
+    narration_text: str = "",
 ) -> tuple[dict, list[dict], list[list[dict]]]:
     """Speak the whole script once, then cut it at the word boundaries.
 
@@ -375,8 +376,12 @@ def synthesize_continuous_narration(
     for index, phrase in enumerate(phrases, 1):
         if not phrase:
             raise IngestError(f"scene {index}: spoken_phrase required for neural TTS")
-    script = " ".join(phrases)
-    key = hashlib.sha256(f"continuous-v1|{voice}|{rate}|{script}".encode()).hexdigest()
+    script = str(narration_text or "").strip() or " ".join(phrases)
+    if _words(script) != [word for phrase in phrases for word in _words(phrase)]:
+        raise IngestError(
+            "narration_text must contain exactly the spoken_phrase words in the same order"
+        )
+    key = hashlib.sha256(f"continuous-v2|{voice}|{rate}|{script}".encode()).hexdigest()
     dest = CACHE / f"{key}.wav"
     cue_path = CACHE / f"{key}.cues.json"
 
@@ -636,6 +641,7 @@ def ingest_job(job: dict) -> dict:
             raw_scenes,
             str(job.get("tts_voice") or "en-US-AndrewMultilingualNeural"),
             str(job.get("tts_rate") or "+8%"),
+            str(job.get("narration_text") or ""),
         )
         for index,(timing,window) in enumerate(zip(speech_timings,max_durations),1):
             spoken=float(timing["speech_end_seconds"])-float(timing["speech_start_seconds"])

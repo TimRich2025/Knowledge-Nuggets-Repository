@@ -167,6 +167,14 @@ def validate_submission_contract(job: dict[str, Any]) -> None:
     scenes = list(job.get("scenes") or [])
     for number, scene in enumerate(scenes, 1):
         validate_scene_contract(scene, number)
+    narration_text = str(job.get("narration_text") or "").strip()
+    if narration_text:
+        narration_words = _words(narration_text)
+        scene_words = [word for scene in scenes for word in _words(scene.get("spoken_phrase"))]
+        if narration_words != scene_words:
+            raise ValueError(
+                "narration_text must contain exactly the spoken_phrase words in the same order"
+            )
     validate_source_diversity(scenes)
 
 

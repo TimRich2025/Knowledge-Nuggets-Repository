@@ -66,6 +66,7 @@ class Job(BaseModel):
     tts_provider: str | None = None
     tts_voice: str | None = None
     tts_rate: str | None = None
+    narration_text: str | None = Field(default=None, max_length=4000)
     scenes: list[dict]
     callback_url: str | None = None
     topic: str | None = Field(default=None, max_length=240)
