@@ -506,11 +506,15 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     make_callback_ok = bool(ALLOWED_CALLBACK_URL and job.callback_url == ALLOWED_CALLBACK_URL)
     if not make_callback_ok:
         auth(authorization)
+    payload = job.model_dump()
+    # The production voice is fixed here so an older Make mapping cannot
+    # silently restore the flatter Christopher delivery.
+    payload["tts_voice"] = "en-US-AndrewMultilingualNeural"
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")
     try:
-        validate_submission_contract(job.model_dump())
+        validate_submission_contract(payload)
     except ValueError as e:
         raise HTTPException(422, str(e))
     for i,s in enumerate(job.scenes,1):
@@ -531,7 +535,7 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
         if not (s.get("source_url") or s.get("direct_download_url")):
             raise HTTPException(422,f"scene {i}: exact direct video URL required")
     jid=f"{safe_id(job.content_id)}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
-    r=db(); payload=job.model_dump(); payload["_job_id"]=jid
+    r=db(); payload["_job_id"]=jid
     r.hset(f"kn:job:{jid}",mapping={"state":"PENDING","payload":json.dumps(payload),"updated_at":str(time.time())})
     r.rpush("kn:queue",jid)
     return {"accepted":True,"job_id":jid,"state":"PENDING"}
