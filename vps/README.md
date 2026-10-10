@@ -74,10 +74,9 @@ so a later vision pass can look before a beat claims what it shows.
 
 ## Soundtrack
 
-No track ships with this repository. The renderer plays whatever licensed audio
-sits in the music directory, `KN_MUSIC_DIR` (default `/data/music`), and renders
-without a bed when the directory is empty, because a missing soundtrack is never
-a reason to fail a finished Short.
+The renderer plays whatever licensed audio sits in the music directory,
+`KN_MUSIC_DIR` (default `/data/music`). When that directory is empty, it creates
+an original ambient pad locally so every finished Short has a background bed.
 
 One track is chosen per Short by hashing its content id, so a re-render sounds
 identical and consecutive Shorts move through the library. The track is looped

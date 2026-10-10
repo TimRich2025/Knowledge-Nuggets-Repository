@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from .soundtrack import (DEFAULT_GAIN_DB, audio_graph, available_tracks,
-                         bed_filter, pick_track)
+                         bed_filter, pick_track, procedural_bed_source)
 
 
 class TrackChoiceTests(unittest.TestCase):
@@ -38,6 +38,12 @@ class TrackChoiceTests(unittest.TestCase):
 
 
 class BedFilterTests(unittest.TestCase):
+    def test_an_empty_library_has_an_original_fallback_bed(self) -> None:
+        source = procedural_bed_source(32.0)
+        self.assertIn("aevalsrc=", source)
+        self.assertIn(":s=48000:d=32.000", source)
+        self.assertIn("sin(2*PI*55*t)", source)
+
     def test_a_short_track_is_looped_to_the_full_length(self) -> None:
         self.assertIn("aloop=loop=-1", bed_filter(32.0))
 

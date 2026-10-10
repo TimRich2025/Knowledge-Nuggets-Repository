@@ -5,9 +5,9 @@ the silence between sentences from sounding empty, not to be noticed. It sits
 far below the speech and ducks further whenever a word is spoken, which is what
 makes a bed feel produced rather than laid on top.
 
-No track ships with this repository. The renderer plays whatever licensed audio
-is placed in the music directory, and renders without a bed when it is empty,
-because a missing soundtrack is never a reason to fail a finished Short.
+The renderer prefers licensed tracks placed in the music directory. When that
+library is empty it generates a restrained cinematic pad locally, so a finished
+Short never ships with narration alone and no third-party recording is needed.
 """
 from __future__ import annotations
 
@@ -32,6 +32,22 @@ FADE_OUT_SECONDS = 1.6
 # A Short opens on a question, so the bed should already be there. Anything
 # longer than this and the first beat plays dry.
 MAX_FADE_IN_SHARE = 0.08
+
+
+def procedural_bed_source(duration: float) -> str:
+    """A quiet, original ambient chord generated entirely by FFmpeg.
+
+    The low fifth and octave make it read as a bed instead of a test tone. A
+    slow swell and a very light upper pulse keep it moving without competing
+    with the narration. The regular ducking and gain stage are applied later.
+    """
+    duration = max(0.5, float(duration))
+    expression = (
+        "0.10*(sin(2*PI*55*t)+0.55*sin(2*PI*82.4069*t)+"
+        "0.35*sin(2*PI*110*t))*(0.75+0.25*sin(2*PI*0.07*t))+"
+        "0.012*sin(2*PI*220*t)*(0.5+0.5*sin(2*PI*1.6*t))"
+    )
+    return f"aevalsrc={expression}:s=48000:d={duration:.3f}"
 
 
 def _tracks_in(root: Path) -> list[Path]:

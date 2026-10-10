@@ -147,7 +147,7 @@ def is_footage(described: object) -> bool:
     describe the graphic, because the graphic is still not the subject.
     """
     body = str(described or "").strip()
-    return bool(body) and not SLATE.search(body)
+    return bool(body) and not SLATE.search(body) and "text unsafe" not in body.lower()
 
 
 def window_terms(frames: list[dict[str, Any]], start: float, end: float) -> set[str]:
@@ -160,6 +160,14 @@ def window_terms(frames: list[dict[str, Any]], start: float, end: float) -> set[
                          key=lambda index: abs(float(frames[index].get("at_seconds", 0))
                                                - (start + end) / 2))
         inside = ordered[:1]
+    # The vision pass marks any source lettering that would be clipped by the
+    # centre 9:16 crop or would compete with the Knowledge Nuggets captions.
+    # One unsafe sampled frame is enough to reject the whole candidate window:
+    # a subtitle or lower third flashing in for only a few frames is still
+    # visibly broken in the finished Short.
+    if any("text unsafe" in str(frames[index].get("describes") or "").lower()
+           for index in inside):
+        return set()
     # A neighbouring tile may stand in for a window that no sample landed in,
     # but it may not rescue one that landed on a slate: that window really does
     # show the slate, and borrowing the next picture along would hide it.

@@ -591,6 +591,21 @@ class SlateTests(unittest.TestCase):
     def test_a_black_frame_is_not_footage_either(self) -> None:
         self.assertEqual(window_terms(self.FRAMES, 19.0, 22.2), set())
 
+    def test_source_text_clipped_by_the_vertical_crop_rejects_the_window(self) -> None:
+        frames = [{"index": 1, "at_seconds": 4.0,
+                   "describes": "Rocket lifts beside tower TEXT UNSAFE CROPPED"}]
+        self.assertEqual(window_terms(frames, 3.0, 6.0), set())
+
+    def test_source_text_larger_than_our_captions_rejects_the_window(self) -> None:
+        frames = [{"index": 1, "at_seconds": 4.0,
+                   "describes": "Rocket lifts beside tower TEXT UNSAFE LARGE"}]
+        self.assertEqual(window_terms(frames, 3.0, 6.0), set())
+
+    def test_small_fully_visible_source_text_may_remain(self) -> None:
+        frames = [{"index": 1, "at_seconds": 4.0,
+                   "describes": "Rocket lifts beside tower TEXT SAFE"}]
+        self.assertIn("rocket", window_terms(frames, 3.0, 6.0))
+
 
 class StemmingTests(unittest.TestCase):
     """The words this footage is actually described in have to meet each other."""

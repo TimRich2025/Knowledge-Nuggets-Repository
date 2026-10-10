@@ -1,7 +1,8 @@
 # Music beds
 
-Drop licensed audio files here and the renderer will use them. Nothing ships in
-this folder, and the renderer produces a Short without a bed when it is empty.
+Drop licensed audio files here and the renderer will use them. When this folder
+is empty, the renderer generates an original ambient bed locally so the Short
+still has background sound without relying on a third-party recording.
 
 - Supported: `.mp3 .m4a .wav .ogg .opus .flac`
 - One track is picked per Short by hashing its content id, so a re-render sounds
