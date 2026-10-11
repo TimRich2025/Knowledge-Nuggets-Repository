@@ -26,7 +26,7 @@ BUNDLED_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "music"
 SUPPORTED_SUFFIXES = (".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac")
 # Far enough under the voice that it reads as atmosphere. The ducking takes it
 # lower again while a word is being spoken.
-DEFAULT_GAIN_DB = float(os.environ.get("KN_MUSIC_GAIN_DB", "-19"))
+DEFAULT_GAIN_DB = float(os.environ.get("KN_MUSIC_GAIN_DB", "-23"))
 FADE_IN_SECONDS = 1.2
 FADE_OUT_SECONDS = 1.6
 # A Short opens on a question, so the bed should already be there. Anything

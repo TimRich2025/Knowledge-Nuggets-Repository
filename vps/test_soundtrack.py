@@ -62,7 +62,7 @@ class BedFilterTests(unittest.TestCase):
         self.assertLessEqual(fade_in, 0.8)
 
     def test_the_bed_sits_well_under_the_voice(self) -> None:
-        self.assertLessEqual(DEFAULT_GAIN_DB, -12)
+        self.assertLessEqual(DEFAULT_GAIN_DB, -23)
         self.assertIn(f"volume={DEFAULT_GAIN_DB:.2f}dB", bed_filter(32.0))
 
 

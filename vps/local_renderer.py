@@ -101,7 +101,7 @@ def scene_word_times(scene: dict, duration: float) -> list[tuple[str, float, flo
         raise RenderError("caption text differs from the spoken script")
     return words
 
-def build_ass(scenes: list[dict], durations: list[float], out: Path):
+def build_ass(caption_pages: list[dict], audio_duration: float, out: Path):
     """Captions that build up word by word and never leave the frame.
 
     Each word is its own event, placed by layout_lock.caption_layout, which
@@ -124,16 +124,21 @@ Style: Main,{CAPTION_FONT_NAME},{caption_ass_fontsize()},&H00FFFFFF,&H00FFFFFF,&
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
     events=[]
-    elapsed=0.0
-    for scene,dur in zip(scenes,durations):
-        words=scene_word_times(scene,dur)
+    for page in caption_pages:
+        page_start=float(page["start_seconds"])
+        page_end=float(page["end_seconds"])
+        words=[]
+        for item in page.get("words") or []:
+            words.append((str(item["text"]).upper(),float(item["start_seconds"]),float(item["end_seconds"])))
+        if not words or page_start < 0 or page_end <= page_start or page_end > audio_duration + .05:
+            raise RenderError("invalid narration caption page")
         placed=caption_layout([word for word,_,_ in words])
         if len(placed)!=len(words):
             raise RenderError("caption layout lost a word")
         for (word,start,_),(laid,cx,cy) in zip(words,placed):
             if laid!=word:
                 raise RenderError("caption layout reordered the words")
-            appear=elapsed+start
+            appear=start
             # Settle outward to the measured size, never past it. A word that
             # overshoots grows around its own fixed centre, which the layout
             # cannot reserve space for, and the outermost word of a full line
@@ -143,9 +148,8 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                     f"\\fscx{pop}\\fscy{pop}" r"\t(0,120,\fscx100\fscy100)"
                     r"\alpha&HFF&\t(0,70,\alpha&H00&)")
             events.append(
-                f"Dialogue: 0,{ass_time(appear)},{ass_time(elapsed+dur)},Main,,0,0,0,,"
+                f"Dialogue: 0,{ass_time(appear)},{ass_time(page_end)},Main,,0,0,0,,"
                 f"{{{effect}}}{ass_escape(word)}")
-        elapsed+=dur
     out.write_text(header+"\n".join(events)+"\n",encoding="utf-8")
 
 def scene_filter(scene: dict, scene_index: int = 1, duration: float | None = None) -> str:
@@ -188,14 +192,14 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     previous_end=0.0
     for idx, scene in enumerate(scenes, 1):
         try:
-            start=float(scene["speech_start_seconds"])
-            end=float(scene["speech_end_seconds"])
+            start=float(scene["visual_start_seconds"])
+            end=float(scene["visual_end_seconds"])
         except Exception as exc:
-            raise RenderError(f"scene {idx}: verified speech interval required") from exc
+            raise RenderError(f"scene {idx}: verified visual interval required") from exc
         if start < 0 or end-start < .6 or start + .05 < previous_end or (idx > 1 and abs(start-previous_end) > .10):
-            raise RenderError(f"scene {idx}: invalid verified speech interval")
+            raise RenderError(f"scene {idx}: invalid verified visual interval")
         if end > audio_dur + .10:
-            raise RenderError(f"scene {idx}: verified speech interval exceeds narration")
+            raise RenderError(f"scene {idx}: verified visual interval exceeds narration")
         speech_intervals.append((start,end))
         previous_end=end
     if speech_intervals[0][0] > .15:
@@ -205,7 +209,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     durations=[end-start for start,end in speech_intervals]
 
     header=job_dir/"header.png"; build_header(q,header)
-    ass=job_dir/"captions.ass"; build_ass(scenes,durations,ass)
+    ass=job_dir/"captions.ass"; build_ass(ingested.get("caption_pages") or [],audio_dur,ass)
     segments=[]; segment_commands=[]
     for idx,(s,dur) in enumerate(zip(scenes,durations),1):
         src=Path(s["local_path"])
@@ -293,12 +297,10 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     out=job_dir/"preview.mp4"
     fc=(f"[0:v]crop={CANVAS_W}:{VIDEO_H}:0:0[lower];[lower]pad={CANVAS_W}:{CANVAS_H}:0:{VIDEO_Y}:color=black[base];"
         f"[base][1:v]overlay=0:0:eof_action=repeat:repeatlast=1[locked];[locked]ass={ass.as_posix()}[v]")
-    studio_voice=("highpass=f=75,"
-                  "equalizer=f=140:t=q:w=0.8:g=2.5,"
-                  "equalizer=f=430:t=q:w=1:g=-1.5,"
-                  "equalizer=f=3000:t=q:w=0.9:g=2.0,"
-                  "acompressor=threshold=0.10:ratio=2.2:attack=18:release=160:makeup=1.35:mix=0.85,"
-                  "loudnorm=I=-15:TP=-1.5:LRA=8,volume=2dB,alimiter=limit=0.89")
+    # Edge voices already arrive mastered. Heavy EQ, compression and a second
+    # limiter made consonants brittle and the body of the voice cloudy. Keep
+    # only inaudible rumble removal and one transparent loudness pass.
+    studio_voice="highpass=f=60,loudnorm=I=-16:TP=-1.5:LRA=11"
     # Prefer a licensed track. If the library is empty, synthesize an original
     # ambient pad so the Short never ships with narration alone.
     track=pick_track(str(job.get("content_id") or ""),available_tracks())

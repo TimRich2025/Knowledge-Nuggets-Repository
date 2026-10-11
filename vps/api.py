@@ -507,9 +507,10 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     if not make_callback_ok:
         auth(authorization)
     payload = job.model_dump()
-    # The production voice is fixed here so an older Make mapping cannot
-    # silently restore the flatter Christopher delivery.
-    payload["tts_voice"] = "en-US-AndrewMultilingualNeural"
+    # Keep old Make mappings from restoring the harsher multilingual voice or
+    # the rushed rate that made the narration sound synthetic.
+    payload["tts_voice"] = "en-US-ChristopherNeural"
+    payload["tts_rate"] = "+2%"
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")

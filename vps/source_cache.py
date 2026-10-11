@@ -8,6 +8,9 @@ from urllib3.util.retry import Retry
 from .config import CACHE, MAX_CACHE_GB
 from .visual_contract import validate_visual_contract
 from .production_contract import (
+    DEFAULT_NARRATION_RATE,
+    DEFAULT_NARRATION_VOICE,
+    MAX_SHOT_SECONDS,
     NATURAL_MALE_EDGE_VOICES,
     source_window_error,
     validate_measured_render_contract,
@@ -294,6 +297,46 @@ def _caption_timings(scene: dict, cues: list[dict], duration: float) -> list[dic
 # A beat boundary is placed in the middle of the pause between two beats, so a
 # visual cut never lands on a word and never clips its tail.
 MIN_BEAT_SECONDS = 0.6
+CAPTION_PAGE_WORDS = 6
+
+
+def plan_visual_timeline(scene_count: int, total: float) -> list[dict]:
+    """Distribute visual cuts across narration without reading its wording."""
+    if scene_count < 1:
+        raise IngestError("at least one visual scene is required")
+    visual_duration = float(total) / scene_count
+    if not MIN_BEAT_SECONDS <= visual_duration <= MAX_SHOT_SECONDS:
+        raise IngestError(
+            f"{scene_count} visual scenes cannot cover {total:.2f}s at the "
+            f"{MIN_BEAT_SECONDS:.1f}-{MAX_SHOT_SECONDS:.1f}s cut rhythm"
+        )
+    return [
+        {"visual_start_seconds": round(float(total) * index / scene_count, 6),
+         "visual_end_seconds": round(float(total) * (index + 1) / scene_count, 6)}
+        for index in range(scene_count)
+    ]
+
+
+def caption_pages_from_words(spoken: list[dict], total: float,
+                             page_words: int = CAPTION_PAGE_WORDS) -> list[dict]:
+    """Build subtitle pages from the master narration, never from visual cuts."""
+    if not spoken or page_words < 1:
+        raise IngestError("master narration needs timed words for subtitles")
+    pages = []
+    for offset in range(0, len(spoken), page_words):
+        words = spoken[offset:offset + page_words]
+        next_word = spoken[offset + page_words] if offset + page_words < len(spoken) else None
+        start = 0.0 if offset == 0 else float(words[0]["start"])
+        end = ((float(words[-1]["end"]) + float(next_word["start"])) / 2
+               if next_word else float(total))
+        pages.append({
+            "start_seconds": round(start, 3),
+            "end_seconds": round(end, 3),
+            "words": [{"text": item["word"].upper(),
+                       "start_seconds": round(float(item["start"]), 3),
+                       "end_seconds": round(float(item["end"]), 3)} for item in words],
+        })
+    return pages
 
 
 def split_narration_at_word_boundaries(
@@ -354,7 +397,7 @@ def synthesize_continuous_narration(
     voice: str,
     rate: str,
     narration_text: str = "",
-) -> tuple[dict, list[dict], list[list[dict]]]:
+) -> tuple[dict, list[dict], list[dict]]:
     """Speak the whole script once, then cut it at the word boundaries.
 
     Synthesising each beat on its own is what made the narration sound
@@ -374,16 +417,10 @@ def synthesize_continuous_narration(
     if not rate_match or int(rate_match.group(1)) > 12:
         raise IngestError("production contract requires a natural Edge speaking rate between -12% and +12%")
 
-    phrases = [str(scene.get("spoken_phrase") or "").strip() for scene in scenes]
-    for index, phrase in enumerate(phrases, 1):
-        if not phrase:
-            raise IngestError(f"scene {index}: spoken_phrase required for neural TTS")
-    script = str(narration_text or "").strip() or " ".join(phrases)
-    if _words(script) != [word for phrase in phrases for word in _words(phrase)]:
-        raise IngestError(
-            "narration_text must contain exactly the spoken_phrase words in the same order"
-        )
-    key = hashlib.sha256(f"continuous-v2|{voice}|{rate}|{script}".encode()).hexdigest()
+    script = str(narration_text or "").strip()
+    if not script:
+        raise IngestError("narration_text is required as the independent master script")
+    key = hashlib.sha256(f"continuous-v3|{voice}|{rate}|{script}".encode()).hexdigest()
     dest = CACHE / f"{key}.wav"
     cue_path = CACHE / f"{key}.cues.json"
 
@@ -427,11 +464,14 @@ def synthesize_continuous_narration(
                            "end": float(cue["start"]) + span * (index + 1) / len(cue_words)})
     if not spoken:
         raise IngestError("neural TTS returned no word boundaries")
+    if [item["word"] for item in spoken] != _words(script):
+        raise IngestError("synthesized words differ from the master narration")
 
     media_meta = _audio_meta(ffprobe(dest), min_seconds=5.0, max_seconds=90.0)
     total = float(media_meta["duration"])
 
-    timings, caption_sets = split_narration_at_word_boundaries(phrases, spoken, total)
+    timings = plan_visual_timeline(len(scenes), total)
+    caption_sets = caption_pages_from_words(spoken, total)
 
     meta = {"key": key, "url": "inline://continuous-tts", "kind": "scene_audio",
             "path": str(dest), "bytes": dest.stat().st_size, **media_meta}
@@ -641,12 +681,12 @@ def ingest_job(job: dict) -> dict:
             raise IngestError("verified visual durations are required before neural TTS") from exc
         audio,speech_timings,caption_timings=synthesize_continuous_narration(
             raw_scenes,
-            str(job.get("tts_voice") or "en-US-AndrewMultilingualNeural"),
-            str(job.get("tts_rate") or "+8%"),
+            str(job.get("tts_voice") or DEFAULT_NARRATION_VOICE),
+            str(job.get("tts_rate") or DEFAULT_NARRATION_RATE),
             str(job.get("narration_text") or ""),
         )
         for index,(timing,window) in enumerate(zip(speech_timings,max_durations),1):
-            spoken=float(timing["speech_end_seconds"])-float(timing["speech_start_seconds"])
+            spoken=float(timing["visual_end_seconds"])-float(timing["visual_start_seconds"])
             if spoken > float(window)+0.05:
                 raise IngestError(
                     f"scene {index}: the beat is spoken in {spoken:.2f}s but its verified "
@@ -667,8 +707,6 @@ def ingest_job(job: dict) -> dict:
     for index, s in enumerate(raw_scenes):
         if speech_timings:
             s = {**s, **speech_timings[index]}
-        if caption_timings and caption_timings[index]:
-            s = {**s, "caption_timings": caption_timings[index]}
         try: validate_visual_contract(s, s.get("scene_number") or s.get("scene") or "?")
         except ValueError as e: raise IngestError(str(e))
         primary = s.get("source_url") or s.get("direct_download_url")
@@ -688,4 +726,4 @@ def ingest_job(job: dict) -> dict:
         validate_measured_render_contract(scenes)
     except ValueError as exc:
         raise IngestError(str(exc)) from exc
-    return {"audio": audio, "scenes": scenes}
+    return {"audio": audio, "scenes": scenes, "caption_pages": caption_timings or []}

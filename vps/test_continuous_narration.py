@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 
 from .production_contract import validate_measured_render_contract
-from .source_cache import IngestError, split_narration_at_word_boundaries
+from .source_cache import (IngestError, caption_pages_from_words,
+                           plan_visual_timeline, split_narration_at_word_boundaries)
 
 
 def reading(phrases: list[str], word_seconds: float = 0.35,
@@ -74,7 +75,8 @@ class BeatSplittingTests(unittest.TestCase):
                                   (phrase.split()[i:i + 3] for i in range(0, len(phrase.split()), 3))],
                 "shot_start_seconds": 4.0, "shot_end_seconds": 7.2,
                 "selected_asset_page_url": f"https://images.nasa.gov/details/W{len(scenes)}",
-                **timing, "caption_timings": cues,
+                "visual_start_seconds": timing["speech_start_seconds"],
+                "visual_end_seconds": timing["speech_end_seconds"],
             })
         validate_measured_render_contract(scenes)
 
@@ -94,6 +96,28 @@ class BeatSplittingTests(unittest.TestCase):
         spoken.append({"word": "extra", "start": total - 0.3, "end": total - 0.1})
         with self.assertRaisesRegex(IngestError, "more words than the script"):
             split_narration_at_word_boundaries(PHRASES, spoken, total)
+
+
+class IndependentTimelineTests(unittest.TestCase):
+    def test_visual_cuts_tile_audio_without_using_script_chunks(self) -> None:
+        timings = plan_visual_timeline(4, 10.0)
+        self.assertEqual(timings[0]["visual_start_seconds"], 0.0)
+        self.assertEqual(timings[-1]["visual_end_seconds"], 10.0)
+        self.assertTrue(all(
+            earlier["visual_end_seconds"] == later["visual_start_seconds"]
+            for earlier, later in zip(timings, timings[1:])
+        ))
+
+    def test_subtitle_pages_ignore_visual_scene_count(self) -> None:
+        spoken, total = reading(PHRASES)
+        pages = caption_pages_from_words(spoken, total, page_words=6)
+        self.assertEqual(
+            [item["text"] for page in pages for item in page["words"]],
+            [item["word"].upper() for item in spoken],
+        )
+        self.assertEqual(pages[0]["start_seconds"], 0.0)
+        self.assertAlmostEqual(pages[-1]["end_seconds"], total, places=3)
+        self.assertTrue(all(len(page["words"]) <= 6 for page in pages))
 
 if __name__ == "__main__":
     unittest.main()
