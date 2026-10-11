@@ -18,8 +18,22 @@ def run(cmd, timeout=240):
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if p.returncode:
         detail = (p.stderr or p.stdout or "<no ffmpeg output>")[-1800:]
-        raise RenderError(f"command failed rc={p.returncode}: {detail}")
+        target = Path(str(cmd[-1])).name if cmd else "unknown"
+        raise RenderError(f"{target} command failed rc={p.returncode}: {detail}")
     return p
+
+
+# Railway's production worker has a deliberately small memory envelope.  One
+# 1080x1920 H.264 encoder with x264 look-ahead can consume hundreds of MB, and
+# two encoder threads plus the subtitle/overlay graph previously let the kernel
+# kill FFmpeg with rc=-9.  Keep the full resolution and quality target, but make
+# the encoder deterministic and low-memory by disabling frame look-ahead.
+X264_LOW_MEMORY = [
+    "-threads", "1",
+    "-preset", "veryfast",
+    "-tune", "zerolatency",
+    "-x264-params", "threads=1:lookahead_threads=1:sync-lookahead=0:rc-lookahead=0",
+]
 
 def probe_duration(path: Path) -> float:
     p = run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(path)], 45)
@@ -217,9 +231,9 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         seg=job_dir/f"seg_{idx:02d}.mp4"; vf=scene_filter(effective_scene,idx,dur)
         if ";" in vf:
             fc=f"[0:v]{vf}[v]"
-            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
+            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_complex_threads","1","-filter_complex",fc,"-map","[v]","-c:v","libx264",*X264_LOW_MEMORY,"-crf","17","-pix_fmt","yuv420p",str(seg)]
         else:
-            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_threads","1","-vf",vf,"-c:v","libx264","-threads","2","-preset","veryfast","-crf","17","-pix_fmt","yuv420p",str(seg)]
+            cmd=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",f"{start:.3f}","-i",str(src),"-an","-filter_threads","1","-vf",vf,"-c:v","libx264",*X264_LOW_MEMORY,"-crf","17","-pix_fmt","yuv420p",str(seg)]
         run(cmd, 300)
         actual_duration=probe_duration(seg)
         if abs(actual_duration-dur) > 0.08:
@@ -256,7 +270,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
         else:
             join=["ffmpeg","-hide_banner","-loglevel","error","-y",
                   "-f","concat","-safe","0","-i",str(concat),
-                  "-c:v","libx264","-threads","2","-preset","veryfast","-crf","17",
+                  "-c:v","libx264",*X264_LOW_MEMORY,"-crf","17",
                   "-pix_fmt","yuv420p","-fps_mode","cfr","-r","30",str(lower)]
             join_timeout=420
         try:
@@ -299,7 +313,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
     graph=fc+";"+audio_graph(studio_voice,audio_dur)
     command += ["-filter_complex_threads","1","-filter_complex",graph,
                 "-map","[v]","-map","[a]"]
-    command += ["-t",f"{audio_dur:.3f}","-c:v","libx264","-threads","2","-preset","veryfast",
+    command += ["-t",f"{audio_dur:.3f}","-c:v","libx264",*X264_LOW_MEMORY,
                 "-crf","16","-pix_fmt","yuv420p","-ac","2","-ar","48000",
                 "-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)]
     run(command,360)

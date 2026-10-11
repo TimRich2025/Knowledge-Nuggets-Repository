@@ -157,7 +157,9 @@ def ingest_video_segment(urls: list[str], shot_start: float, shot_end: float, po
                          "-ss",f"{fast_seek:.3f}","-i",url,
                          "-ss",f"{accurate_seek:.3f}","-t",f"{length:.3f}",
                          "-an","-vf",f"scale={scale}",
-                         "-c:v","libx264","-threads","2","-preset","veryfast","-crf","18","-pix_fmt","yuv420p",
+                         "-c:v","libx264","-threads","1","-preset","veryfast","-tune","zerolatency",
+                         "-x264-params","threads=1:lookahead_threads=1:sync-lookahead=0:rc-lookahead=0",
+                         "-crf","18","-pix_fmt","yuv420p",
                          "-movflags","+faststart",str(tmp)]
                     p=subprocess.run(cmd,capture_output=True,text=True,timeout=210)
                     if p.returncode:
