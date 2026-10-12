@@ -6,7 +6,7 @@ COPY vps/requirements.txt /app/vps/requirements.txt
 RUN pip install --no-cache-dir -r /app/vps/requirements.txt
 COPY . /app
 RUN python /app/vps/download_kokoro_models.py
-RUN python -m vps.kokoro_tts --text "Knowledge Nuggets audio check." --output /tmp/kokoro-smoke.wav
+RUN python -m vps.kokoro_tts --text "At launch, a rocket can burn fuel and pour hot exhaust downward while still waiting beside its tower. The engines fire, but restraints hold the vehicle above the pad as flame, smoke, and steam spread across the ground. That waiting period lets the engines build enough thrust; the rocket does not rise until its upward thrust exceeds its weight. Once that balance tips, it clears the launch pad, rises past the tower, and leaves a smoke trail below. Then, in the open sky, the rocket continues climbing and gains speed steadily." --output /tmp/kokoro-smoke.wav
 RUN python /app/vps/generate_music_library.py
-RUN python -m py_compile layout_lock.py vps/config.py vps/source_cache.py vps/google_fallback_tts.py vps/kokoro_tts.py vps/generate_music_library.py vps/source_catalog.py vps/social_metadata.py vps/youtube_publisher.py vps/visual_contract.py vps/local_renderer.py vps/pipeline.py vps/api.py vps/worker.py vps/entrypoint.py vps/stress_test.py vps/service.py vps/source_ingest_smoke.py
+RUN python -m py_compile layout_lock.py vps/config.py vps/source_cache.py vps/google_fallback_tts.py vps/passage_chunks.py vps/kokoro_tts.py vps/generate_music_library.py vps/source_catalog.py vps/social_metadata.py vps/youtube_publisher.py vps/visual_contract.py vps/local_renderer.py vps/pipeline.py vps/api.py vps/worker.py vps/entrypoint.py vps/stress_test.py vps/service.py vps/source_ingest_smoke.py
 CMD ["python", "-m", "vps.worker"]

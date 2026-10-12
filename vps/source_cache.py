@@ -468,7 +468,7 @@ def synthesize_continuous_narration(
     script = str(narration_text or "").strip()
     if not script:
         raise IngestError("narration_text is required as the independent master script")
-    key = hashlib.sha256(f"continuous-v9|kokoro-am-puck-fp16-s080-espeak|{script}".encode()).hexdigest()
+    key = hashlib.sha256(f"continuous-v10|kokoro-am-puck-fp16-s080-passage280|{script}".encode()).hexdigest()
     dest = CACHE / f"{key}.wav"
     cue_path = CACHE / f"{key}.cues.json"
 
@@ -476,7 +476,6 @@ def synthesize_continuous_narration(
         with tempfile.TemporaryDirectory(prefix="edge-tts-", dir=CACHE) as tmp_name:
             tmp = Path(tmp_name)
             media = tmp / "narration-kokoro.wav"
-            subtitles = tmp / "narration.srt"
             kokoro_errors = []
             backend = "kokoro-am-puck-fp16-s080-continuous"
             for attempt in range(1, 4):
@@ -484,55 +483,27 @@ def synthesize_continuous_narration(
                                         capture_output=True, text=True, timeout=600)
                 if result.returncode == 0 and media.is_file():
                     break
-                kokoro_errors.append((result.stderr or result.stdout or "no output")[-500:])
+                detail = (result.stderr or result.stdout or
+                          f"process exited {result.returncode} without output")[-500:]
+                kokoro_errors.append(detail)
+                print(f"KN required Puck narration attempt {attempt} failed: {detail}", flush=True)
                 time.sleep(2 * attempt)
             else:
-                backend = "edge"
-                media = tmp / "narration-edge.mp3"
-                edge_errors = []
-                for attempt in range(1, 4):
-                    result = subprocess.run(build_tts_command(voice, rate, pitch, script, media, subtitles),
-                                            capture_output=True, text=True, timeout=180)
-                    if result.returncode == 0 and media.is_file() and subtitles.is_file():
-                        break
-                    edge_errors.append((result.stderr or result.stdout or "no output")[-500:])
-                    time.sleep(2 * attempt)
-                else:
-                    backend = "google-continuous-high-energy"
-                    media = tmp / "narration-google.mp3"
-                    google_errors = []
-                    for attempt in range(1, 4):
-                        result = subprocess.run(build_google_fallback_command(script, media),
-                                                capture_output=True, text=True, timeout=180)
-                        if result.returncode == 0 and media.is_file():
-                            break
-                        google_errors.append((result.stderr or result.stdout or "no output")[-500:])
-                        time.sleep(2 * attempt)
-                    else:
-                        raise IngestError(
-                            "all continuous narration backends failed: "
-                            f"kokoro={' | '.join(kokoro_errors)}; "
-                            f"edge={' | '.join(edge_errors)}; google={' | '.join(google_errors)}"
-                        )
+                # A successful video with the wrong voice is a failed product.
+                # Never upload an Edge or Google substitute when Puck is the
+                # production contract.
+                raise IngestError(
+                    "required Puck narration failed after retries: "
+                    f"{' | '.join(kokoro_errors)}"
+                )
             wav = tmp / "narration.wav"
             # No silence removal. The pauses the voice puts between sentences are
             # the reason it sounds read rather than assembled.
-            filters = []
-            if backend == "kokoro-am-puck-fp16-s080-continuous":
-                filters = ["-af", (
-                    "aresample=48000:resampler=soxr:precision=28,"
-                    "highpass=f=65,equalizer=f=2600:t=q:w=1.2:g=1.2,"
-                    "acompressor=threshold=-20dB:ratio=1.7:attack=8:release=90:makeup=1.2"
-                )]
-            elif backend != "edge":
-                # Lift the already lighter voice by roughly one semitone and
-                # add a little forward presence.  The net tempo increase is
-                # about five percent, energetic without sounding rushed.
-                filters = ["-af", (
-                    "aresample=48000,asetrate=50880,aresample=48000,atempo=0.99,"
-                    "highpass=f=70,equalizer=f=3200:t=q:w=1.3:g=2,"
-                    "acompressor=threshold=-18dB:ratio=2:attack=5:release=80:makeup=1.5"
-                )]
+            filters = ["-af", (
+                "aresample=48000:resampler=soxr:precision=28,"
+                "highpass=f=65,equalizer=f=2600:t=q:w=1.2:g=1.2,"
+                "acompressor=threshold=-20dB:ratio=1.7:attack=8:release=90:makeup=1.2"
+            )]
             command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(media),
                        "-vn", *filters, "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
             result = subprocess.run(command, capture_output=True, text=True, timeout=120)
