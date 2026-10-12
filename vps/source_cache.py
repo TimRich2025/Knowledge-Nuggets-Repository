@@ -260,6 +260,48 @@ def build_tts_command(voice: str, rate: str, pitch: str, phrase: str,
             "--write-media", str(media), "--write-subtitles", str(subtitles)]
 
 
+def build_google_fallback_command(phrase: str, media: Path) -> list[str]:
+    """Build the no-key backup call without changing the one-pass narration."""
+    return [sys.executable, "-m", "vps.google_fallback_tts",
+            f"--text={phrase}", "--output", str(media)]
+
+
+def build_kokoro_command(phrase: str, media: Path) -> list[str]:
+    """Build the primary offline one-pass narrator call."""
+    return [sys.executable, "-m", "vps.kokoro_tts",
+            f"--text={phrase}", "--output", str(media)]
+
+
+def estimated_word_cues(script: str, total: float) -> list[dict]:
+    """Estimate subtitle timing for a continuous voice without word marks.
+
+    Character weight approximates syllable duration.  Punctuation owns the
+    following pause, which keeps page changes away from sentence endings.
+    """
+    tokens = re.findall(r"([A-Za-z0-9']+)([^A-Za-z0-9']*)", script)
+    if not tokens or total <= 0:
+        raise IngestError("fallback narration needs words and a measured duration")
+    weighted = []
+    for word, punctuation in tokens:
+        weight = 0.55 + len(word) ** 0.55
+        if any(mark in punctuation for mark in ".!?"):
+            weight += 1.35
+        elif any(mark in punctuation for mark in ",;:"):
+            weight += 0.55
+        weighted.append((word.lower(), weight))
+    scale = float(total) / sum(weight for _, weight in weighted)
+    cursor = 0.0
+    cues = []
+    for word, weight in weighted:
+        duration = weight * scale
+        spoken_fraction = 0.68 if duration > 0.45 else 0.82
+        end = min(float(total), cursor + duration * spoken_fraction)
+        cues.append({"text": word, "start": cursor, "end": max(cursor + 0.05, end)})
+        cursor += duration
+    cues[-1]["end"] = min(float(total), max(cues[-1]["end"], cursor))
+    return cues
+
+
 def _caption_timings(scene: dict, cues: list[dict], duration: float) -> list[dict]:
     words=[]
     for cue in cues:
@@ -426,38 +468,87 @@ def synthesize_continuous_narration(
     script = str(narration_text or "").strip()
     if not script:
         raise IngestError("narration_text is required as the independent master script")
-    key = hashlib.sha256(f"continuous-v4|{voice}|{rate}|{pitch}|{script}".encode()).hexdigest()
+    key = hashlib.sha256(f"continuous-v6|kokoro-af-bella|{script}".encode()).hexdigest()
     dest = CACHE / f"{key}.wav"
     cue_path = CACHE / f"{key}.cues.json"
 
     if not (dest.exists() and cue_path.is_file()):
         with tempfile.TemporaryDirectory(prefix="edge-tts-", dir=CACHE) as tmp_name:
             tmp = Path(tmp_name)
-            media = tmp / "narration.mp3"
+            media = tmp / "narration-kokoro.wav"
             subtitles = tmp / "narration.srt"
-            errors = []
+            kokoro_errors = []
+            backend = "kokoro-af-bella-continuous"
             for attempt in range(1, 4):
-                result = subprocess.run(build_tts_command(voice, rate, pitch, script, media, subtitles),
-                                        capture_output=True, text=True, timeout=180)
-                if result.returncode == 0 and media.is_file() and subtitles.is_file():
+                result = subprocess.run(build_kokoro_command(script, media),
+                                        capture_output=True, text=True, timeout=600)
+                if result.returncode == 0 and media.is_file():
                     break
-                errors.append((result.stderr or result.stdout or "no output")[-500:])
+                kokoro_errors.append((result.stderr or result.stdout or "no output")[-500:])
                 time.sleep(2 * attempt)
             else:
-                raise IngestError(f"neural TTS failed after retries: {' | '.join(errors)}")
+                backend = "edge"
+                media = tmp / "narration-edge.mp3"
+                edge_errors = []
+                for attempt in range(1, 4):
+                    result = subprocess.run(build_tts_command(voice, rate, pitch, script, media, subtitles),
+                                            capture_output=True, text=True, timeout=180)
+                    if result.returncode == 0 and media.is_file() and subtitles.is_file():
+                        break
+                    edge_errors.append((result.stderr or result.stdout or "no output")[-500:])
+                    time.sleep(2 * attempt)
+                else:
+                    backend = "google-continuous-high-energy"
+                    media = tmp / "narration-google.mp3"
+                    google_errors = []
+                    for attempt in range(1, 4):
+                        result = subprocess.run(build_google_fallback_command(script, media),
+                                                capture_output=True, text=True, timeout=180)
+                        if result.returncode == 0 and media.is_file():
+                            break
+                        google_errors.append((result.stderr or result.stdout or "no output")[-500:])
+                        time.sleep(2 * attempt)
+                    else:
+                        raise IngestError(
+                            "all continuous narration backends failed: "
+                            f"kokoro={' | '.join(kokoro_errors)}; "
+                            f"edge={' | '.join(edge_errors)}; google={' | '.join(google_errors)}"
+                        )
             wav = tmp / "narration.wav"
             # No silence removal. The pauses the voice puts between sentences are
             # the reason it sounds read rather than assembled.
+            filters = []
+            if backend == "kokoro-af-bella-continuous":
+                filters = ["-af", (
+                    "aresample=48000,asetrate=49440,aresample=48000,atempo=0.99,"
+                    "highpass=f=70,equalizer=f=3200:t=q:w=1.3:g=1.5"
+                )]
+            elif backend != "edge":
+                # Lift the already lighter voice by roughly one semitone and
+                # add a little forward presence.  The net tempo increase is
+                # about five percent, energetic without sounding rushed.
+                filters = ["-af", (
+                    "aresample=48000,asetrate=50880,aresample=48000,atempo=0.99,"
+                    "highpass=f=70,equalizer=f=3200:t=q:w=1.3:g=2,"
+                    "acompressor=threshold=-18dB:ratio=2:attack=5:release=80:makeup=1.5"
+                )]
             command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(media),
-                       "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
+                       "-vn", *filters, "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", str(wav)]
             result = subprocess.run(command, capture_output=True, text=True, timeout=120)
             if result.returncode or not wav.is_file():
                 raise IngestError(f"narration decode failed: {result.stderr[-500:]}")
-            cue_path.write_text(json.dumps(_parse_edge_srt(subtitles)), encoding="utf-8")
+            if backend == "edge":
+                cues = _parse_edge_srt(subtitles)
+            else:
+                duration = float(_audio_meta(ffprobe(wav), min_seconds=5.0, max_seconds=90.0)["duration"])
+                cues = estimated_word_cues(script, duration)
+            cue_path.write_text(json.dumps({"tts_backend": backend, "cues": cues}), encoding="utf-8")
             os.replace(wav, dest)
     os.utime(dest, None)
 
-    cues = json.loads(cue_path.read_text(encoding="utf-8"))
+    cue_payload = json.loads(cue_path.read_text(encoding="utf-8"))
+    cues = cue_payload["cues"] if isinstance(cue_payload, dict) else cue_payload
+    backend = cue_payload.get("tts_backend", "edge") if isinstance(cue_payload, dict) else "edge"
     spoken: list[dict] = []
     for cue in cues:
         cue_words = _words(cue["text"])
@@ -480,6 +571,7 @@ def synthesize_continuous_narration(
     caption_sets = caption_pages_from_words(spoken, total)
 
     meta = {"key": key, "url": "inline://continuous-tts", "kind": "scene_audio",
+            "tts_backend": backend,
             "path": str(dest), "bytes": dest.stat().st_size, **media_meta}
     return meta, timings, caption_sets
 

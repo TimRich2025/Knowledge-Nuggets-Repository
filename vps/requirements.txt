@@ -4,3 +4,5 @@ requests==2.32.5
 Pillow==11.3.0
 redis==6.4.0
 edge-tts==7.2.8
+gTTS==2.5.4
+kokoro-onnx==0.6.1

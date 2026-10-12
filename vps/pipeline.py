@@ -34,7 +34,9 @@ def process(job: dict, work_dir: Path, youtube_refresh_token: str | None = None)
     os.replace(preview,final_preview)
     token=hashlib.sha256(f"{API_TOKEN}:{content_id}".encode()).hexdigest() if API_TOKEN else ""
     preview_url=f"{PUBLIC_BASE_URL}/preview/{content_id}?token={token}" if PUBLIC_BASE_URL and token else ""
-    result={**result,"content_id":content_id,"preview_path":str(final_preview),"preview_url":preview_url,"elapsed_seconds":round(time.time()-started,2)}
+    result={**result,"content_id":content_id,"preview_path":str(final_preview),"preview_url":preview_url,
+            "narration_backend":ingested.get("audio",{}).get("tts_backend","supplied"),
+            "elapsed_seconds":round(time.time()-started,2)}
     if YOUTUBE_UPLOAD_ENABLED:
         topic = str(job.get("topic") or " ".join(job.get("core_question_lines") or [])).strip()
         fact_statement = str(job.get("fact_statement") or job.get("narration_text") or " ".join(
