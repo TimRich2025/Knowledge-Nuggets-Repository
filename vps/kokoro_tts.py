@@ -14,6 +14,7 @@ from kokoro_onnx import Kokoro
 DEFAULT_MODEL = "/opt/kokoro/kokoro-v1.0.fp16.onnx"
 DEFAULT_VOICES = "/opt/kokoro/voices-v1.0.bin"
 VOICE = "am_puck"
+SPEED = 0.80
 
 
 def synthesize(text: str, output: Path) -> None:
@@ -29,7 +30,10 @@ def synthesize(text: str, output: Path) -> None:
         samples, sample_rate = kokoro.create(
             text,
             voice=VOICE,
-            speed=1.10,
+            # Puck's natural delivery is unusually fast.  This model-level
+            # pace keeps a normal 30-second Short near its established length
+            # without lossy post-synthesis time stretching.
+            speed=SPEED,
             lang="en-us",
             sentence_pause=0.15,
             clause_pause=0.05,

@@ -64,6 +64,17 @@ class WorkerRecoveryTests(unittest.TestCase):
         self.assertEqual(redis.rows["kn:job:published"]["result"], "")
         self.assertEqual(redis.queue, [("kn:queue", "published")])
 
+    def test_recent_concat_rounding_failure_is_requeued_once(self):
+        redis = FakeRedis({
+            "kn:job:concat": self.job(
+                "concatenated visual track lost scenes after three attempts: "
+                "joined 21.600s instead of 22.300s"
+            )
+        })
+        self.assertEqual(recover_recent_audio_jobs(redis, now=1000.0), 1)
+        self.assertEqual(redis.rows["kn:job:concat"]["state"], "QUEUED")
+        self.assertEqual(redis.queue, [("kn:queue", "concat")])
+
     def test_unrelated_or_old_failures_are_ignored(self):
         redis = FakeRedis({
             "kn:job:render": self.job("ffmpeg failed"),

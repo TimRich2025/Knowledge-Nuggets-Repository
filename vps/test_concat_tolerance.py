@@ -19,13 +19,13 @@ class ConcatToleranceTests(unittest.TestCase):
         )
 
     def test_an_eighteen_scene_short_survives_real_measured_drift(self) -> None:
-        """The defect: 18 scenes drifted 0.501s and a 0.300s bound rejected them."""
-        self.assertGreaterEqual(concat_duration_tolerance([1.76] * 18), 0.501)
+        """The defect: 18 valid scenes drifted 0.700s after an MP4 join."""
+        self.assertGreaterEqual(concat_duration_tolerance([1.24] * 18), 0.700)
 
-    def test_one_frame_per_scene_is_the_budget(self) -> None:
+    def test_one_and_a_quarter_frames_per_scene_is_the_budget(self) -> None:
         scenes = [2.0] * 12
         self.assertAlmostEqual(
-            concat_duration_tolerance(scenes), len(scenes) / TIMELINE_FPS
+            concat_duration_tolerance(scenes), len(scenes) * 1.25 / TIMELINE_FPS
         )
 
     def test_a_dropped_scene_is_always_still_caught(self) -> None:

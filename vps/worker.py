@@ -58,15 +58,25 @@ def recover_recent_audio_jobs(r: Redis, now: float | None = None) -> int:
         state = row.get("state")
         old_edge_failure = (state == "FAILED" and
                             "neural TTS failed after retries" in str(error.get("message") or ""))
+        concat_rounding_failure = (
+            state == "FAILED"
+            and "concatenated visual track lost scenes after three attempts"
+            in str(error.get("message") or "")
+        )
         old_audio_render = (
             state == "COMPLETED"
             and result.get("narration_backend") == "kokoro-af-bella-continuous"
             and result.get("soundtrack_mode") == "procedural-upbeat"
         )
-        if not (old_edge_failure or old_audio_render):
+        if not (old_edge_failure or old_audio_render or concat_rounding_failure):
             continue
         jid = str(key).removeprefix("kn:job:")
-        migration = "edge-v1" if old_edge_failure else "male-fp16-music-v1"
+        if old_edge_failure:
+            migration = "edge-v1"
+        elif concat_rounding_failure:
+            migration = "concat-rounding-v1"
+        else:
+            migration = "male-fp16-music-v1"
         marker = f"kn:recovery:{migration}:{jid}"
         if not r.set(marker, "1", nx=True, ex=7 * 24 * 3600):
             continue
