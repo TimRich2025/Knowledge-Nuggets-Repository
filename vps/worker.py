@@ -34,6 +34,40 @@ def consume_youtube_oauth_code(r: Redis) -> None:
         r.setex("kn:youtube_oauth:status", 600, "FAILED")
         print(f"KN YouTube OAuth token exchange failed: {exc}", flush=True)
 
+
+def recover_recent_tts_failures(r: Redis, now: float | None = None) -> int:
+    """Requeue fresh jobs that failed only because the old Edge endpoint died.
+
+    The payload already passed Make and the API contract, so recreating it in
+    Make is unnecessary.  A per-job marker prevents restart loops.
+    """
+    current = float(now if now is not None else time.time())
+    recovered = 0
+    for key in r.scan_iter("kn:job:*"):
+        row = r.hgetall(key)
+        if row.get("state") != "FAILED":
+            continue
+        try:
+            age = current - float(row.get("updated_at") or 0)
+            error = json.loads(row.get("error") or "{}")
+            job = json.loads(row.get("payload") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not 0 <= age <= 48 * 3600:
+            continue
+        message = str(error.get("message") or "")
+        if "neural TTS failed after retries" not in message:
+            continue
+        jid = str(key).removeprefix("kn:job:")
+        marker = f"kn:recovery:kokoro-v1:{jid}"
+        if not r.set(marker, "1", nx=True, ex=7 * 24 * 3600):
+            continue
+        r.hset(key, mapping={"state": "QUEUED", "updated_at": str(current)})
+        r.rpush("kn:queue", jid)
+        recovered += 1
+        print(f"KN recovered Edge TTS failure with offline narrator: {jid}", flush=True)
+    return recovered
+
 def main():
     if not REDIS_URL: raise SystemExit("REDIS_URL missing")
     r=Redis.from_url(REDIS_URL,decode_responses=True,socket_connect_timeout=10,socket_timeout=15)
@@ -42,8 +76,9 @@ def main():
     for stale in TMP.iterdir():
         clean_work_dir(stale)
     cache_cleanup=prune_cache()
+    recovered=recover_recent_tts_failures(r)
     print(f"KN startup cache cleanup: {cache_cleanup}",flush=True)
-    print("KN worker ready; Redis queue connected",flush=True)
+    print(f"KN worker ready; Redis queue connected; recovered={recovered}",flush=True)
     while True:
         consume_youtube_oauth_code(r)
         item=r.blpop("kn:queue",timeout=5)
