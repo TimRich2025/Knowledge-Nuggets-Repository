@@ -63,6 +63,11 @@ def recover_recent_audio_jobs(r: Redis, now: float | None = None) -> int:
             and "concatenated visual track lost scenes after three attempts"
             in str(error.get("message") or "")
         )
+        puck_memory_failure = (
+            state == "FAILED"
+            and "required Puck narration failed after retries"
+            in str(error.get("message") or "")
+        )
         old_audio_render = (
             state == "COMPLETED"
             and result.get("narration_backend") == "kokoro-af-bella-continuous"
@@ -73,7 +78,7 @@ def recover_recent_audio_jobs(r: Redis, now: float | None = None) -> int:
             and result.get("narration_backend") == "google-continuous-high-energy"
             and str(result.get("soundtrack_mode") or "").startswith("original-library:")
         )
-        if not (old_edge_failure or old_audio_render or concat_rounding_failure
+        if not (old_edge_failure or old_audio_render or concat_rounding_failure or puck_memory_failure
                 or wrong_voice_render):
             continue
         jid = str(key).removeprefix("kn:job:")
@@ -81,6 +86,8 @@ def recover_recent_audio_jobs(r: Redis, now: float | None = None) -> int:
             migration = "edge-v1"
         elif concat_rounding_failure:
             migration = "concat-rounding-v1"
+        elif puck_memory_failure:
+            migration = "puck-thread-memory-v1"
         elif wrong_voice_render:
             migration = "kokoro-low-memory-v1"
         else:

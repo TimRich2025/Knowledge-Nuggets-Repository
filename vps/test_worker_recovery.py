@@ -75,6 +75,16 @@ class WorkerRecoveryTests(unittest.TestCase):
         self.assertEqual(redis.rows["kn:job:concat"]["state"], "QUEUED")
         self.assertEqual(redis.queue, [("kn:queue", "concat")])
 
+    def test_required_puck_failure_is_requeued_for_memory_fix(self):
+        redis = FakeRedis({
+            "kn:job:puck": self.job(
+                "required Puck narration failed after retries: exit=-9"
+            )
+        })
+        self.assertEqual(recover_recent_audio_jobs(redis, now=1000.0), 1)
+        self.assertEqual(redis.rows["kn:job:puck"]["state"], "QUEUED")
+        self.assertEqual(redis.queue, [("kn:queue", "puck")])
+
     def test_completed_google_fallback_with_new_music_is_requeued_once(self):
         job = self.job("")
         job.update({

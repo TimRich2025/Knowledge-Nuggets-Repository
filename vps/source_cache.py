@@ -483,8 +483,9 @@ def synthesize_continuous_narration(
                                         capture_output=True, text=True, timeout=600)
                 if result.returncode == 0 and media.is_file():
                     break
-                detail = (result.stderr or result.stdout or
-                          f"process exited {result.returncode} without output")[-500:]
+                raw_detail = result.stderr or result.stdout or "no process output"
+                detail = (f"exit={result.returncode}; "
+                          f"head={raw_detail[:700]}; tail={raw_detail[-700:]}")
                 kokoro_errors.append(detail)
                 print(f"KN required Puck narration attempt {attempt} failed: {detail}", flush=True)
                 time.sleep(2 * attempt)
