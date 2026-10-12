@@ -66,6 +66,7 @@ class Job(BaseModel):
     tts_provider: str | None = None
     tts_voice: str | None = None
     tts_rate: str | None = None
+    tts_pitch: str | None = None
     narration_text: str | None = Field(default=None, max_length=4000)
     scenes: list[dict]
     callback_url: str | None = None
@@ -507,10 +508,12 @@ def submit(job: Job, authorization: str | None = Header(default=None)):
     if not make_callback_ok:
         auth(authorization)
     payload = job.model_dump()
-    # Keep old Make mappings from restoring the harsher multilingual voice or
-    # the rushed rate that made the narration sound synthetic.
-    payload["tts_voice"] = "en-US-ChristopherNeural"
-    payload["tts_rate"] = "+2%"
+    # Make may replay an older bundle, so pin the production voice here. Aria
+    # has a naturally brighter register; the small prosody lift and quicker
+    # pace give a knowledge Short energy without turning it into an advert.
+    payload["tts_voice"] = "en-US-AriaNeural"
+    payload["tts_rate"] = "+6%"
+    payload["tts_pitch"] = "+8Hz"
     if job.production_status != "READY": raise HTTPException(422,"production_status must be READY")
     if len(job.core_question_lines)!=2: raise HTTPException(422,"exactly two core question lines required")
     if not job.scenes: raise HTTPException(422,"at least one scene required")

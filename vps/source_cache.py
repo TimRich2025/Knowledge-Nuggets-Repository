@@ -9,9 +9,10 @@ from .config import CACHE, MAX_CACHE_GB
 from .visual_contract import validate_visual_contract
 from .production_contract import (
     DEFAULT_NARRATION_RATE,
+    DEFAULT_NARRATION_PITCH,
     DEFAULT_NARRATION_VOICE,
     MAX_SHOT_SECONDS,
-    NATURAL_MALE_EDGE_VOICES,
+    APPROVED_EDGE_VOICES,
     source_window_error,
     validate_measured_render_contract,
     validate_submission_contract,
@@ -246,7 +247,8 @@ def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+",text.lower())
 
 
-def build_tts_command(voice: str, rate: str, phrase: str, media: Path, subtitles: Path) -> list[str]:
+def build_tts_command(voice: str, rate: str, pitch: str, phrase: str,
+                      media: Path, subtitles: Path) -> list[str]:
     """Build the neural-TTS call so leading-hyphen values survive argparse.
 
     A natural rate such as "-3%" begins with a hyphen.  Passed as a separate
@@ -254,7 +256,7 @@ def build_tts_command(voice: str, rate: str, phrase: str, media: Path, subtitles
     single word is spoken.  The "--opt=value" form keeps the value intact.
     """
     return [sys.executable, "-m", "vps.edge_word_tts",
-            f"--voice={voice}", f"--rate={rate}", f"--text={phrase}",
+            f"--voice={voice}", f"--rate={rate}", f"--pitch={pitch}", f"--text={phrase}",
             "--write-media", str(media), "--write-subtitles", str(subtitles)]
 
 
@@ -396,6 +398,7 @@ def synthesize_continuous_narration(
     scenes: list[dict],
     voice: str,
     rate: str,
+    pitch: str,
     narration_text: str = "",
 ) -> tuple[dict, list[dict], list[dict]]:
     """Speak the whole script once, then cut it at the word boundaries.
@@ -411,16 +414,19 @@ def synthesize_continuous_narration(
     the word boundaries say exactly where each beat ends. The visual cuts then
     follow the speech instead of the speech being forced onto the cuts.
     """
-    if voice not in NATURAL_MALE_EDGE_VOICES:
-        raise IngestError("production contract requires an approved natural male Edge voice")
+    if voice not in APPROVED_EDGE_VOICES:
+        raise IngestError("production contract requires an approved energetic Edge voice")
     rate_match = re.fullmatch(r"[+-](\d{1,2})%", rate)
     if not rate_match or int(rate_match.group(1)) > 12:
         raise IngestError("production contract requires a natural Edge speaking rate between -12% and +12%")
+    pitch_match = re.fullmatch(r"[+-](\d{1,2})Hz", pitch)
+    if not pitch_match or int(pitch_match.group(1)) > 20:
+        raise IngestError("production contract requires an Edge pitch between -20Hz and +20Hz")
 
     script = str(narration_text or "").strip()
     if not script:
         raise IngestError("narration_text is required as the independent master script")
-    key = hashlib.sha256(f"continuous-v3|{voice}|{rate}|{script}".encode()).hexdigest()
+    key = hashlib.sha256(f"continuous-v4|{voice}|{rate}|{pitch}|{script}".encode()).hexdigest()
     dest = CACHE / f"{key}.wav"
     cue_path = CACHE / f"{key}.cues.json"
 
@@ -431,7 +437,7 @@ def synthesize_continuous_narration(
             subtitles = tmp / "narration.srt"
             errors = []
             for attempt in range(1, 4):
-                result = subprocess.run(build_tts_command(voice, rate, script, media, subtitles),
+                result = subprocess.run(build_tts_command(voice, rate, pitch, script, media, subtitles),
                                         capture_output=True, text=True, timeout=180)
                 if result.returncode == 0 and media.is_file() and subtitles.is_file():
                     break
@@ -485,8 +491,8 @@ def synthesize_edge_scene_audio(
     max_durations: list[float],
 ) -> tuple[dict,list[dict],list[list[dict]]]:
     """Create no-key neural narration plus measured word-boundary subtitles."""
-    if voice not in NATURAL_MALE_EDGE_VOICES:
-        raise IngestError("production contract requires an approved natural male Edge voice")
+    if voice not in APPROVED_EDGE_VOICES:
+        raise IngestError("production contract requires an approved energetic Edge voice")
     rate_match=re.fullmatch(r"[+-](\d{1,2})%",rate)
     if not rate_match or int(rate_match.group(1)) > 12:
         raise IngestError("production contract requires a natural Edge speaking rate between -12% and +12%")
@@ -498,7 +504,7 @@ def synthesize_edge_scene_audio(
             if not phrase:
                 raise IngestError(f"scene {index}: spoken_phrase required for neural TTS")
             media=tmp/f"scene-{index:02d}.mp3"; subtitles=tmp/f"scene-{index:02d}.srt"
-            command=build_tts_command(voice,rate,phrase,media,subtitles)
+            command=build_tts_command(voice,rate,DEFAULT_NARRATION_PITCH,phrase,media,subtitles)
             errors=[]
             for attempt in range(1,4):
                 result=subprocess.run(command,capture_output=True,text=True,timeout=90)
@@ -683,6 +689,7 @@ def ingest_job(job: dict) -> dict:
             raw_scenes,
             str(job.get("tts_voice") or DEFAULT_NARRATION_VOICE),
             str(job.get("tts_rate") or DEFAULT_NARRATION_RATE),
+            str(job.get("tts_pitch") or DEFAULT_NARRATION_PITCH),
             str(job.get("narration_text") or ""),
         )
         for index,(timing,window) in enumerate(zip(speech_timings,max_durations),1):

@@ -25,7 +25,8 @@ class ProductionContractTests(unittest.TestCase):
     def test_accepts_a_short_natural_edge_beat(self) -> None:
         job = {
             "tts_provider": "EDGE",
-            "tts_voice": "en-US-ChristopherNeural",
+            "tts_voice": "en-US-AriaNeural",
+            "tts_pitch": "+8Hz",
             "narration_text": NARRATION,
             "scenes": [SCENE],
         }
@@ -64,8 +65,9 @@ class ProductionContractTests(unittest.TestCase):
             })
         validate_submission_contract({
             "tts_provider": "EDGE",
-            "tts_voice": "en-US-ChristopherNeural",
-            "tts_rate": "+2%",
+            "tts_voice": "en-US-AriaNeural",
+            "tts_rate": "+6%",
+            "tts_pitch": "+8Hz",
             "narration_text": (
                 "A rocket can wait motionless on its launch pad while fuel and "
                 "pressure build below, then rise in one continuous burst past the tower."
@@ -77,8 +79,9 @@ class ProductionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one complete passage"):
             validate_submission_contract({
                 "tts_provider": "EDGE",
-                "tts_voice": "en-US-ChristopherNeural",
-                "tts_rate": "+2%",
+                "tts_voice": "en-US-AriaNeural",
+                "tts_rate": "+6%",
+                "tts_pitch": "+8Hz",
                 "scenes": [SCENE],
             })
 

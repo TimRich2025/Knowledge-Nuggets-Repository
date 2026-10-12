@@ -42,11 +42,13 @@ MAX_SOURCE_SHARE = 1.0 / 3.0
 MAX_CONSECUTIVE_SCENES_PER_SOURCE = 2
 MAX_WORDS_PER_EXPLANATION = 11
 MAX_WORDS_PER_CAPTION = 4
-DEFAULT_NARRATION_VOICE = "en-US-ChristopherNeural"
-DEFAULT_NARRATION_RATE = "+2%"
-NATURAL_MALE_EDGE_VOICES = {
-    "en-US-AndrewMultilingualNeural",
-    "en-US-ChristopherNeural",
+DEFAULT_NARRATION_VOICE = "en-US-AriaNeural"
+DEFAULT_NARRATION_RATE = "+6%"
+DEFAULT_NARRATION_PITCH = "+8Hz"
+APPROVED_EDGE_VOICES = {
+    "en-US-AriaNeural",
+    "en-US-GuyNeural",
+    "en-US-JennyNeural",
 }
 
 
@@ -157,15 +159,19 @@ def validate_submission_contract(job: dict[str, Any]) -> None:
     if str(job.get("tts_provider") or "").upper() != "EDGE":
         raise ValueError("production contract requires EDGE neural narration")
     voice = str(job.get("tts_voice") or DEFAULT_NARRATION_VOICE)
-    if voice not in NATURAL_MALE_EDGE_VOICES:
-        allowed = ", ".join(sorted(NATURAL_MALE_EDGE_VOICES))
-        raise ValueError(f"production contract requires one approved natural male voice: {allowed}")
+    if voice not in APPROVED_EDGE_VOICES:
+        allowed = ", ".join(sorted(APPROVED_EDGE_VOICES))
+        raise ValueError(f"production contract requires one approved energetic Edge voice: {allowed}")
     if job.get("audio_url") or job.get("audio_base64") or job.get("scene_audio_base64"):
         raise ValueError("production contract forbids unverified supplied audio")
     rate = str(job.get("tts_rate") or DEFAULT_NARRATION_RATE)
     match = re.fullmatch(r"([+-])(\d{1,2})%", rate)
     if not match or int(match.group(2)) > 12:
         raise ValueError("production contract requires a natural EDGE speaking rate between -12% and +12%")
+    pitch = str(job.get("tts_pitch") or DEFAULT_NARRATION_PITCH)
+    pitch_match = re.fullmatch(r"([+-])(\d{1,2})Hz", pitch)
+    if not pitch_match or int(pitch_match.group(2)) > 20:
+        raise ValueError("production contract requires an EDGE pitch between -20Hz and +20Hz")
     scenes = list(job.get("scenes") or [])
     for number, scene in enumerate(scenes, 1):
         validate_scene_contract(scene, number)

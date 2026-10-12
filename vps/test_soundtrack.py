@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .soundtrack import (DEFAULT_GAIN_DB, audio_graph, available_tracks,
+from .soundtrack import (BED_TARGET_LUFS, DEFAULT_GAIN_DB, audio_graph, available_tracks,
                          bed_filter, pick_track, procedural_bed_source)
 
 
@@ -42,7 +42,8 @@ class BedFilterTests(unittest.TestCase):
         source = procedural_bed_source(32.0)
         self.assertIn("aevalsrc=", source)
         self.assertIn(":s=48000:d=32.000", source)
-        self.assertIn("sin(2*PI*55*t)", source)
+        self.assertIn(r"mod(t\,0.5)", source)
+        self.assertIn("floor(t*4)", source)
 
     def test_a_short_track_is_looped_to_the_full_length(self) -> None:
         self.assertIn("aloop=loop=-1", bed_filter(32.0))
@@ -61,13 +62,15 @@ class BedFilterTests(unittest.TestCase):
         fade_in = float(chain.split("afade=t=in:st=0:d=")[1].split(",")[0])
         self.assertLessEqual(fade_in, 0.8)
 
-    def test_the_bed_sits_well_under_the_voice(self) -> None:
-        self.assertLessEqual(DEFAULT_GAIN_DB, -23)
+    def test_the_bed_has_a_fixed_audible_loudness(self) -> None:
+        self.assertEqual(BED_TARGET_LUFS, -20)
+        self.assertEqual(DEFAULT_GAIN_DB, -1)
+        self.assertIn("loudnorm=I=-20.0:TP=-3.0:LRA=7.0", bed_filter(32.0))
         self.assertIn(f"volume={DEFAULT_GAIN_DB:.2f}dB", bed_filter(32.0))
 
 
 class AudioGraphTests(unittest.TestCase):
-    """Measured on a spoken passage: the bed dips 11.5 dB under a word."""
+    """The bed stays present and makes controlled room for every word."""
 
     def test_the_bed_is_ducked_by_the_finished_voice(self) -> None:
         graph = audio_graph("highpass=f=75", 32.0)
@@ -76,7 +79,7 @@ class AudioGraphTests(unittest.TestCase):
 
     def test_the_duck_is_gentle_enough_to_read_as_headroom(self) -> None:
         graph = audio_graph("highpass=f=75", 32.0)
-        self.assertIn("threshold=0.08:ratio=4", graph)
+        self.assertIn("threshold=0.10:ratio=2.5", graph)
 
     def test_the_mix_never_rescales_the_voice(self) -> None:
         """amix normalises by default, which would halve the narration."""

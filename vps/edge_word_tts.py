@@ -8,8 +8,9 @@ from pathlib import Path
 from edge_tts import Communicate, SubMaker
 
 
-async def synthesize(text: str, voice: str, rate: str, media: Path, subtitles: Path) -> None:
-    speech = Communicate(text, voice, rate=rate, boundary="WordBoundary")
+async def synthesize(text: str, voice: str, rate: str, pitch: str,
+                     media: Path, subtitles: Path) -> None:
+    speech = Communicate(text, voice, rate=rate, pitch=pitch, boundary="WordBoundary")
     cues = SubMaker()
     with media.open("wb") as output:
         async for chunk in speech.stream():
@@ -27,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text", required=True)
     parser.add_argument("--voice", required=True)
     parser.add_argument("--rate", required=True)
+    parser.add_argument("--pitch", required=True)
     parser.add_argument("--write-media", type=Path, required=True)
     parser.add_argument("--write-subtitles", type=Path, required=True)
     return parser
@@ -34,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     options = build_parser().parse_args()
-    asyncio.run(synthesize(options.text, options.voice, options.rate,
+    asyncio.run(synthesize(options.text, options.voice, options.rate, options.pitch,
                            options.write_media, options.write_subtitles))
 
 

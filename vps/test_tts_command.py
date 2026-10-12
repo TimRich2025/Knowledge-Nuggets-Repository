@@ -12,7 +12,7 @@ class TtsCommandTests(unittest.TestCase):
 
     def _parse(self, rate: str):
         command = build_tts_command(
-            "en-US-ChristopherNeural", rate, "engines build full thrust",
+            "en-US-AriaNeural", rate, "+8Hz", "engines build full thrust",
             Path("/tmp/scene.mp3"), Path("/tmp/scene.srt"),
         )
         # Skip the interpreter and -m module selector; the rest is the real argv.
@@ -33,11 +33,12 @@ class TtsCommandTests(unittest.TestCase):
     def test_phrase_and_voice_are_preserved(self) -> None:
         options = self._parse("-3%")
         self.assertEqual(options.text, "engines build full thrust")
-        self.assertEqual(options.voice, "en-US-ChristopherNeural")
+        self.assertEqual(options.voice, "en-US-AriaNeural")
+        self.assertEqual(options.pitch, "+8Hz")
 
     def test_a_separate_argv_entry_would_break(self) -> None:
         """Documents the defect this command builder exists to prevent."""
-        broken = ["--voice=v", "--rate", "-3%", "--text=t",
+        broken = ["--voice=v", "--rate", "-3%", "--pitch=+8Hz", "--text=t",
                   "--write-media", "m", "--write-subtitles", "s"]
         with self.assertRaises(SystemExit):
             build_parser().parse_args(broken)

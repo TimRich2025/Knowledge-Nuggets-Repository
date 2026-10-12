@@ -1,12 +1,12 @@
 """The music bed under the narration.
 
-A faceless knowledge Short is carried by its voice, so the bed exists to stop
-the silence between sentences from sounding empty, not to be noticed. It sits
-far below the speech and ducks further whenever a word is spoken, which is what
-makes a bed feel produced rather than laid on top.
+The bed must be audible enough to create forward motion while the narration
+stays dominant. Every source is normalised to a fixed musical loudness before
+gentle voice ducking, so neither a quiet synth nor a hot licensed master can
+silently disappear or overwhelm the words.
 
 The renderer prefers licensed tracks placed in the music directory. When that
-library is empty it generates a restrained cinematic pad locally, so a finished
+library is empty it generates an upbeat electronic groove locally, so a finished
 Short never ships with narration alone and no third-party recording is needed.
 """
 from __future__ import annotations
@@ -24,9 +24,11 @@ from .config import ROOT
 MUSIC_DIR = Path(os.environ.get("KN_MUSIC_DIR", str(ROOT / "music")))
 BUNDLED_MUSIC_DIR = Path(__file__).resolve().parent.parent / "assets" / "music"
 SUPPORTED_SUFFIXES = (".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac")
-# Far enough under the voice that it reads as atmosphere. The ducking takes it
-# lower again while a word is being spoken.
-DEFAULT_GAIN_DB = float(os.environ.get("KN_MUSIC_GAIN_DB", "-23"))
+# Normalise first, then trim only one decibel. During speech the sidechain takes
+# roughly another five to seven decibels away. The result stays present without
+# masking consonants.
+BED_TARGET_LUFS = float(os.environ.get("KN_MUSIC_TARGET_LUFS", "-20"))
+DEFAULT_GAIN_DB = float(os.environ.get("KN_MUSIC_GAIN_DB", "-1"))
 FADE_IN_SECONDS = 1.2
 FADE_OUT_SECONDS = 1.6
 # A Short opens on a question, so the bed should already be there. Anything
@@ -35,17 +37,20 @@ MAX_FADE_IN_SHARE = 0.08
 
 
 def procedural_bed_source(duration: float) -> str:
-    """A quiet, original ambient chord generated entirely by FFmpeg.
+    """An original 120 BPM electronic groove generated entirely by FFmpeg.
 
-    The low fifth and octave make it read as a bed instead of a test tone. A
-    slow swell and a very light upper pulse keep it moving without competing
-    with the narration. The regular ducking and gain stage are applied later.
+    A short kick, off-beat bass and four-note arpeggio create movement. Their
+    envelopes keep the groove clean under speech instead of becoming a flat
+    drone. Loudness matching and voice ducking are applied later.
     """
     duration = max(0.5, float(duration))
     expression = (
-        "0.10*(sin(2*PI*55*t)+0.55*sin(2*PI*82.4069*t)+"
-        "0.35*sin(2*PI*110*t))*(0.75+0.25*sin(2*PI*0.07*t))+"
-        "0.012*sin(2*PI*220*t)*(0.5+0.5*sin(2*PI*1.6*t))"
+        r"0.24*sin(2*PI*55*t)*exp(-18*mod(t\,0.5))+"
+        r"0.13*sin(2*PI*110*t)*exp(-10*mod(t+0.25\,0.5))+"
+        r"0.10*sin(2*PI*t*if(eq(mod(floor(t*4)\,4)\,0)\,220\,"
+        r"if(eq(mod(floor(t*4)\,4)\,1)\,277.18\,"
+        r"if(eq(mod(floor(t*4)\,4)\,2)\,329.63\,440))))*exp(-12*mod(t\,0.25))+"
+        r"0.025*(2*random(0)-1)*exp(-38*mod(t\,0.25))"
     )
     return f"aevalsrc={expression}:s=48000:d={duration:.3f}"
 
@@ -88,6 +93,7 @@ def bed_filter(duration: float, gain_db: float = DEFAULT_GAIN_DB) -> str:
         "aloop=loop=-1:size=2000000000,"
         f"atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,"
         "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+        f"loudnorm=I={BED_TARGET_LUFS:.1f}:TP=-3.0:LRA=7.0,"
         f"afade=t=in:st=0:d={fade_in:.3f},"
         f"afade=t=out:st={start_out:.3f}:d={fade_out:.3f},"
         f"volume={gain_db:.2f}dB"
@@ -106,12 +112,10 @@ def audio_graph(voice_chain: str, duration: float, voice_input: str = "2:a",
         f"[{voice_input}]{voice_chain}[voiced];"
         f"[voiced]asplit=2[voiceout][duckkey];"
         f"[{music_input}]{bed_filter(duration, gain_db)}[bedraw];"
-        # Measured against a spoken passage: this pair dips the bed 11.5 dB while
-        # a word is being said and lets it back up in the pause. A steeper
-        # setting reached 24 dB, which reads as the music switching off and on
-        # rather than as it making room.
-        "[bedraw][duckkey]sidechaincompress=threshold=0.08:ratio=4:attack=15:"
-        "release=380:makeup=1[bed];"
+        # A gentle dip keeps the groove audible through a sentence while still
+        # clearing the centre for consonants and sentence attacks.
+        "[bedraw][duckkey]sidechaincompress=threshold=0.10:ratio=2.5:attack=20:"
+        "release=260:makeup=1[bed];"
         "[voiceout][bed]amix=inputs=2:duration=first:dropout_transition=0:"
         "normalize=0[mixed];"
         "[mixed]alimiter=limit=0.94[a]"

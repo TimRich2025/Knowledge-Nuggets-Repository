@@ -19,8 +19,9 @@ from .stress_test import fixtures, verify_mp4
 
 NUMBERS = ("one", "two", "three", "four", "five",
            "six", "seven", "eight", "nine", "ten")
-VOICE = "en-US-AndrewMultilingualNeural"
-RATE = "+8%"
+VOICE = "en-US-AriaNeural"
+RATE = "+6%"
+PITCH = "+8Hz"
 
 
 def main() -> None:
@@ -61,6 +62,7 @@ def main() -> None:
                         "content_id": f"STAGE2-DYNAMIC-{index:02d}",
                         "tts_voice": VOICE,
                         "tts_rate": RATE,
+                        "tts_pitch": PITCH,
                         "scenes": [dict(scene) for scene in fixture_job["scenes"]],
                     }
                     phrases = [
@@ -73,8 +75,10 @@ def main() -> None:
                     for scene, phrase in zip(job["scenes"], phrases):
                         scene["spoken_phrase"] = phrase
                         scene["caption_beats"] = phrase.rstrip(".").split()
+                    narration_text = " ".join(phrases)
+                    job["narration_text"] = narration_text
                     audio, speech_timings, captions = synthesize_continuous_narration(
-                        job["scenes"], VOICE, RATE
+                        job["scenes"], VOICE, RATE, PITCH, narration_text
                     )
                     for scene, timing, words in zip(job["scenes"], speech_timings, captions):
                         scene.update(timing)
