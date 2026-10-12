@@ -35,37 +35,46 @@ def consume_youtube_oauth_code(r: Redis) -> None:
         print(f"KN YouTube OAuth token exchange failed: {exc}", flush=True)
 
 
-def recover_recent_tts_failures(r: Redis, now: float | None = None) -> int:
-    """Requeue fresh jobs that failed only because the old Edge endpoint died.
+def recover_recent_audio_jobs(r: Redis, now: float | None = None) -> int:
+    """Requeue the narrowly identified jobs superseded by an audio migration.
 
     The payload already passed Make and the API contract, so recreating it in
-    Make is unnecessary.  A per-job marker prevents restart loops.
+    Make is unnecessary. A per-job marker prevents restart loops and the exact
+    backend/mode match prevents unrelated completed videos being duplicated.
     """
     current = float(now if now is not None else time.time())
     recovered = 0
     for key in r.scan_iter("kn:job:*"):
         row = r.hgetall(key)
-        if row.get("state") != "FAILED":
-            continue
         try:
             age = current - float(row.get("updated_at") or 0)
             error = json.loads(row.get("error") or "{}")
-            job = json.loads(row.get("payload") or "{}")
+            result = json.loads(row.get("result") or "{}")
+            json.loads(row.get("payload") or "{}")
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
         if not 0 <= age <= 48 * 3600:
             continue
-        message = str(error.get("message") or "")
-        if "neural TTS failed after retries" not in message:
+        state = row.get("state")
+        old_edge_failure = (state == "FAILED" and
+                            "neural TTS failed after retries" in str(error.get("message") or ""))
+        old_audio_render = (
+            state == "COMPLETED"
+            and result.get("narration_backend") == "kokoro-af-bella-continuous"
+            and result.get("soundtrack_mode") == "procedural-upbeat"
+        )
+        if not (old_edge_failure or old_audio_render):
             continue
         jid = str(key).removeprefix("kn:job:")
-        marker = f"kn:recovery:kokoro-v1:{jid}"
+        migration = "edge-v1" if old_edge_failure else "male-fp16-music-v1"
+        marker = f"kn:recovery:{migration}:{jid}"
         if not r.set(marker, "1", nx=True, ex=7 * 24 * 3600):
             continue
-        r.hset(key, mapping={"state": "QUEUED", "updated_at": str(current)})
+        r.hset(key, mapping={"state": "QUEUED", "result": "", "error": "",
+                             "updated_at": str(current)})
         r.rpush("kn:queue", jid)
         recovered += 1
-        print(f"KN recovered Edge TTS failure with offline narrator: {jid}", flush=True)
+        print(f"KN requeued audio migration {migration}: {jid}", flush=True)
     return recovered
 
 def main():
@@ -76,7 +85,7 @@ def main():
     for stale in TMP.iterdir():
         clean_work_dir(stale)
     cache_cleanup=prune_cache()
-    recovered=recover_recent_tts_failures(r)
+    recovered=recover_recent_audio_jobs(r)
     print(f"KN startup cache cleanup: {cache_cleanup}",flush=True)
     print(f"KN worker ready; Redis queue connected; recovered={recovered}",flush=True)
     while True:

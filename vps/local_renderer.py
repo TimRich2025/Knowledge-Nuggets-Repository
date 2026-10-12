@@ -308,7 +308,9 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
              "-loop","1","-i",str(header),"-i",str(audio)]
     if track is not None:
         command += ["-i",str(track)]
-        soundtrack_mode=f"licensed:{track.name}"
+        soundtrack_mode=(f"original-library:{track.stem}"
+                         if track.name.startswith("kn_original_")
+                         else f"licensed:{track.name}")
     else:
         command += ["-f","lavfi","-i",procedural_bed_source(audio_dur)]
         soundtrack_mode="procedural-upbeat"
@@ -317,7 +319,7 @@ def render_job(job: dict, ingested: dict, job_dir: Path) -> dict:
                 "-map","[v]","-map","[a]"]
     command += ["-t",f"{audio_dur:.3f}","-c:v","libx264",*X264_LOW_MEMORY,
                 "-crf","16","-pix_fmt","yuv420p","-ac","2","-ar","48000",
-                "-c:a","aac","-b:a","192k","-movflags","+faststart",str(out)]
+                "-c:a","aac","-b:a","256k","-movflags","+faststart",str(out)]
     run(command,360)
 
     frame=job_dir/"qc_frame.png"

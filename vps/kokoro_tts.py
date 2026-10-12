@@ -11,9 +11,9 @@ import onnxruntime as ort
 from kokoro_onnx import Kokoro
 
 
-DEFAULT_MODEL = "/opt/kokoro/kokoro-v1.0.int8.onnx"
+DEFAULT_MODEL = "/opt/kokoro/kokoro-v1.0.fp16.onnx"
 DEFAULT_VOICES = "/opt/kokoro/voices-v1.0.bin"
-VOICE = "af_bella"
+VOICE = "am_puck"
 
 
 def synthesize(text: str, output: Path) -> None:
@@ -29,10 +29,10 @@ def synthesize(text: str, output: Path) -> None:
         samples, sample_rate = kokoro.create(
             text,
             voice=VOICE,
-            speed=1.08,
+            speed=1.10,
             lang="en-us",
-            sentence_pause=0.18,
-            clause_pause=0.07,
+            sentence_pause=0.15,
+            clause_pause=0.05,
             continuous=True,
         )
     finally:

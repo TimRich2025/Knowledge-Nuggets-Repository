@@ -468,7 +468,7 @@ def synthesize_continuous_narration(
     script = str(narration_text or "").strip()
     if not script:
         raise IngestError("narration_text is required as the independent master script")
-    key = hashlib.sha256(f"continuous-v6|kokoro-af-bella|{script}".encode()).hexdigest()
+    key = hashlib.sha256(f"continuous-v7|kokoro-am-puck-fp16|{script}".encode()).hexdigest()
     dest = CACHE / f"{key}.wav"
     cue_path = CACHE / f"{key}.cues.json"
 
@@ -478,7 +478,7 @@ def synthesize_continuous_narration(
             media = tmp / "narration-kokoro.wav"
             subtitles = tmp / "narration.srt"
             kokoro_errors = []
-            backend = "kokoro-af-bella-continuous"
+            backend = "kokoro-am-puck-fp16-continuous"
             for attempt in range(1, 4):
                 result = subprocess.run(build_kokoro_command(script, media),
                                         capture_output=True, text=True, timeout=600)
@@ -518,10 +518,11 @@ def synthesize_continuous_narration(
             # No silence removal. The pauses the voice puts between sentences are
             # the reason it sounds read rather than assembled.
             filters = []
-            if backend == "kokoro-af-bella-continuous":
+            if backend == "kokoro-am-puck-fp16-continuous":
                 filters = ["-af", (
-                    "aresample=48000,asetrate=49440,aresample=48000,atempo=0.99,"
-                    "highpass=f=70,equalizer=f=3200:t=q:w=1.3:g=1.5"
+                    "aresample=48000:resampler=soxr:precision=28,"
+                    "highpass=f=65,equalizer=f=2600:t=q:w=1.2:g=1.2,"
+                    "acompressor=threshold=-20dB:ratio=1.7:attack=8:release=90:makeup=1.2"
                 )]
             elif backend != "edge":
                 # Lift the already lighter voice by roughly one semitone and

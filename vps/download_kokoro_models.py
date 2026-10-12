@@ -10,7 +10,10 @@ from pathlib import Path
 ROOT = Path(os.environ.get("KN_KOKORO_DIR", "/opt/kokoro"))
 BASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1"
 FILES = {
-    "kokoro-v1.0.int8.onnx": "ae315a79b623f244700e4afb9246c46a26066782e049ba174bf3ba433970ee9c",
+    # FP16 keeps a 0.999 spectral correlation with the reference FP32 model.
+    # The old INT8 export only reached 0.916 and was audible on sibilants and
+    # sentence attacks, especially after YouTube's own AAC transcode.
+    "kokoro-v1.0.fp16.onnx": "f3a290d384fbb27966d462905c71a46cef9e5fd00516b40df32a0b4afe77ac96",
     "voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
 }
 

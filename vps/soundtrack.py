@@ -27,8 +27,8 @@ SUPPORTED_SUFFIXES = (".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac")
 # Normalise first, then trim only one decibel. During speech the sidechain takes
 # roughly another five to seven decibels away. The result stays present without
 # masking consonants.
-BED_TARGET_LUFS = float(os.environ.get("KN_MUSIC_TARGET_LUFS", "-20"))
-DEFAULT_GAIN_DB = float(os.environ.get("KN_MUSIC_GAIN_DB", "-1"))
+BED_TARGET_LUFS = float(os.environ.get("KN_MUSIC_TARGET_LUFS", "-21"))
+DEFAULT_GAIN_DB = float(os.environ.get("KN_MUSIC_GAIN_DB", "-1.5"))
 FADE_IN_SECONDS = 1.2
 FADE_OUT_SECONDS = 1.6
 # A Short opens on a question, so the bed should already be there. Anything
@@ -93,7 +93,7 @@ def bed_filter(duration: float, gain_db: float = DEFAULT_GAIN_DB) -> str:
         "aloop=loop=-1:size=2000000000,"
         f"atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,"
         "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
-        f"loudnorm=I={BED_TARGET_LUFS:.1f}:TP=-3.0:LRA=7.0,"
+        f"loudnorm=I={BED_TARGET_LUFS:.1f}:TP=-2.0:LRA=8.0,"
         f"afade=t=in:st=0:d={fade_in:.3f},"
         f"afade=t=out:st={start_out:.3f}:d={fade_out:.3f},"
         f"volume={gain_db:.2f}dB"
@@ -114,8 +114,8 @@ def audio_graph(voice_chain: str, duration: float, voice_input: str = "2:a",
         f"[{music_input}]{bed_filter(duration, gain_db)}[bedraw];"
         # A gentle dip keeps the groove audible through a sentence while still
         # clearing the centre for consonants and sentence attacks.
-        "[bedraw][duckkey]sidechaincompress=threshold=0.10:ratio=2.5:attack=20:"
-        "release=260:makeup=1[bed];"
+        "[bedraw][duckkey]sidechaincompress=threshold=0.09:ratio=3:attack=12:"
+        "release=220:makeup=1[bed];"
         "[voiceout][bed]amix=inputs=2:duration=first:dropout_transition=0:"
         "normalize=0[mixed];"
         "[mixed]alimiter=limit=0.94[a]"
