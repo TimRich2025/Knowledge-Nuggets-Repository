@@ -468,7 +468,7 @@ def synthesize_continuous_narration(
     script = str(narration_text or "").strip()
     if not script:
         raise IngestError("narration_text is required as the independent master script")
-    key = hashlib.sha256(f"continuous-v8|kokoro-am-puck-fp16-s080|{script}".encode()).hexdigest()
+    key = hashlib.sha256(f"continuous-v9|kokoro-am-puck-fp16-s080-espeak|{script}".encode()).hexdigest()
     dest = CACHE / f"{key}.wav"
     cue_path = CACHE / f"{key}.cues.json"
 

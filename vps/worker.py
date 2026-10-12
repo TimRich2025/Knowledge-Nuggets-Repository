@@ -68,13 +68,21 @@ def recover_recent_audio_jobs(r: Redis, now: float | None = None) -> int:
             and result.get("narration_backend") == "kokoro-af-bella-continuous"
             and result.get("soundtrack_mode") == "procedural-upbeat"
         )
-        if not (old_edge_failure or old_audio_render or concat_rounding_failure):
+        missing_espeak_render = (
+            state == "COMPLETED"
+            and result.get("narration_backend") == "google-continuous-high-energy"
+            and str(result.get("soundtrack_mode") or "").startswith("original-library:")
+        )
+        if not (old_edge_failure or old_audio_render or concat_rounding_failure
+                or missing_espeak_render):
             continue
         jid = str(key).removeprefix("kn:job:")
         if old_edge_failure:
             migration = "edge-v1"
         elif concat_rounding_failure:
             migration = "concat-rounding-v1"
+        elif missing_espeak_render:
+            migration = "kokoro-espeak-v1"
         else:
             migration = "male-fp16-music-v1"
         marker = f"kn:recovery:{migration}:{jid}"
